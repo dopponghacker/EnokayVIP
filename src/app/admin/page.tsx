@@ -84,6 +84,15 @@ export default function AdminPage() {
   const [bookingCodeInput, setBookingCodeInput] = useState("");
   const [savingBookingCode, setSavingBookingCode] = useState(false);
 
+  // Tier pricing state
+  const [priceInputs, setPriceInputs] = useState<Record<Tier, string>>({
+    "accurate-odds": "",
+    "draw-tips": "",
+    "correct-score": "",
+  });
+  const [loadingPrices, setLoadingPrices] = useState(false);
+  const [savingPrices, setSavingPrices] = useState(false);
+
   const adminRequest = useCallback(async (url: string, init?: RequestInit) => {
     const response = await fetch(url, init);
     if (response.status === 401) {
@@ -150,6 +159,56 @@ export default function AdminPage() {
       fetchBookingCode(activeTier);
     }
   }, [tab, activeTier, fetchBookingCode]);
+
+  useEffect(() => {
+    if (tab !== "settings") return;
+    setLoadingPrices(true);
+    fetch("/api/tier-prices")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((prices) => {
+        if (prices) {
+          setPriceInputs({
+            "accurate-odds": String(prices["accurate-odds"] ?? ""),
+            "draw-tips": String(prices["draw-tips"] ?? ""),
+            "correct-score": String(prices["correct-score"] ?? ""),
+          });
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoadingPrices(false));
+  }, [tab]);
+
+  async function handleSavePrices(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setSavingPrices(true);
+    try {
+      const body: Record<string, number> = {};
+      for (const tier of TIERS) {
+        const value = Number(priceInputs[tier]);
+        if (!Number.isFinite(value) || value < 1) {
+          throw new Error(`Enter a valid amount for ${TIER_META[tier].label}.`);
+        }
+        body[tier] = value;
+      }
+      const res = await adminRequest("/api/tier-prices", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const prices = await res.json();
+      setPriceInputs({
+        "accurate-odds": String(prices["accurate-odds"]),
+        "draw-tips": String(prices["draw-tips"]),
+        "correct-score": String(prices["correct-score"]),
+      });
+      addToast("Prices updated successfully", "success");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to save prices.");
+    } finally {
+      setSavingPrices(false);
+    }
+  }
 
   // --- VIP Tips handlers ---
   const filteredTips = tips.filter((t) => t.tier === activeTier);
@@ -649,7 +708,50 @@ export default function AdminPage() {
         )}
         {/* ===== SETTINGS TAB ===== */}
         {tab === "settings" && (
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6 max-w-lg">
+          <div className="grid md:grid-cols-2 gap-6 items-start max-w-4xl">
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
+            <h3 className="text-base font-bold text-gray-900 mb-1">
+              <i className="fas fa-tags text-teal-600 mr-2" />
+              Package Pricing
+            </h3>
+            <p className="text-xs text-gray-500 mb-5">
+              Set the amount customers pay for each VIP package. Changes apply immediately to the website and Mobile Money charges.
+            </p>
+            {loadingPrices ? (
+              <div className="py-6 text-center">
+                <i className="fas fa-spinner fa-spin text-xl text-teal-500" />
+              </div>
+            ) : (
+              <form onSubmit={handleSavePrices} className="space-y-4">
+                {TIERS.map((tier) => (
+                  <div key={tier}>
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">
+                      <i className={`fas ${tier === "accurate-odds" ? "fa-crown" : tier === "draw-tips" ? "fa-handshake" : "fa-bullseye"} mr-1.5 text-gray-400`} />
+                      {TIER_META[tier].label} (GH₵)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="0.01"
+                      required
+                      className="admin-input"
+                      placeholder={`e.g. ${TIER_META[tier].amount}`}
+                      value={priceInputs[tier]}
+                      onChange={(e) => setPriceInputs({ ...priceInputs, [tier]: e.target.value })}
+                    />
+                  </div>
+                ))}
+                <div className="pt-2">
+                  <button type="submit" disabled={savingPrices} className="admin-btn admin-btn-primary">
+                    <i className={`fas ${savingPrices ? "fa-spinner fa-spin" : "fa-save"}`} />
+                    {savingPrices ? "Saving..." : "Save Prices"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 sm:p-6">
             <h3 className="text-base font-bold text-gray-900 mb-1">
               <i className="fas fa-shield-halved text-teal-600 mr-2" />
               Change Credentials
@@ -711,6 +813,7 @@ export default function AdminPage() {
                 </button>
               </div>
             </form>
+          </div>
           </div>
         )}
       </div>

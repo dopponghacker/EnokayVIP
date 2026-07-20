@@ -3,14 +3,14 @@ import Footer from "@/components/Footer";
 import Link from "next/link";
 import TrackRecord from "@/components/TrackRecord";
 import { getAllPublicMatches } from "@/lib/store";
+import { getTierPrices } from "@/lib/pricing";
 
 const channelUrl = "https://whatsapp.com/channel/0029Vb6duVSH5JM4KZ2JxG3f";
 
-const packages = [
+const packageMeta = [
   {
     name: "Accurate Odds",
-    slug: "accurate-odds",
-    price: "GH₵100",
+    slug: "accurate-odds" as const,
     description: "A carefully selected premium slip built around disciplined value.",
     icon: "fa-crown",
     accent: "teal",
@@ -19,8 +19,7 @@ const packages = [
   },
   {
     name: "Draw Tips",
-    slug: "draw-tips",
-    price: "GH₵100",
+    slug: "draw-tips" as const,
     description: "Focused draw selections for bettors who prefer higher-value markets.",
     icon: "fa-handshake",
     accent: "amber",
@@ -28,8 +27,7 @@ const packages = [
   },
   {
     name: "Correct Score",
-    slug: "correct-score",
-    price: "GH₵250",
+    slug: "correct-score" as const,
     description: "Our most selective package for high-reward correct-score markets.",
     icon: "fa-bullseye",
     accent: "violet",
@@ -52,6 +50,11 @@ export default async function HomePage({
   const showAdmin = params.admin === "true";
 
   const hasMatches = (await getAllPublicMatches()).length > 0;
+  const prices = await getTierPrices();
+  const packages = packageMeta.map((item) => ({
+    ...item,
+    price: `GH₵${prices[item.slug]}`,
+  }));
 
   return (
     <>

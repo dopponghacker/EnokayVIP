@@ -60,3 +60,26 @@ model BookingCode {
   @@unique([tier, date])
   @@map("booking_codes")
 }
+model Payment {
+  id          String   @id @default(cuid())
+  externalRef String   @unique
+  tier        String
+  amount      Float
+  currency    String   @default("GHS")
+  phone       String
+  channel     Int
+  status      String   @default("pending")
+  moolreId    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("payments")
+}
+
+model TierPrice {
+  tier      String   @id
+  amount    Float
+  updatedAt DateTime @updatedAt
+
+  @@map("tier_prices")
+}
