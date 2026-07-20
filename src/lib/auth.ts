@@ -150,7 +150,7 @@ export const sessionCookieOptions = {
   httpOnly: true,
   sameSite: "strict" as const,
   secure: true,
-  path: "/enokay-secure-login",
+  path: "/",
   maxAge: SESSION_TTL_SECONDS,
 };
 
