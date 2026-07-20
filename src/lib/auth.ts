@@ -1,5 +1,7 @@
 import { createHmac, timingSafeEqual, randomBytes, scryptSync } from "node:crypto";
-import { prisma } from "@/lib/prisma";
+import { eq } from "drizzle-orm";
+import { db } from "../../db";
+import { adminCredentials } from "../../db/schema";
 
 export const ADMIN_SESSION_COOKIE = "enokay_admin_session";
 export const PAYMENT_TOKEN_COOKIE = "enokay_payment";
@@ -27,11 +29,7 @@ function sign(value: string, secret: string) {
 function safeCompare(a: string, b: string): boolean {
   const bufA = Buffer.from(a, "utf8");
   const bufB = Buffer.from(b, "utf8");
-  if (bufA.length !== bufB.length) {
-    const fake = Buffer.alloc(bufA.length, 0);
-    timingSafeEqual(fake, bufB);
-    return false;
-  }
+  if (bufA.length !== bufB.length) return false;
   return timingSafeEqual(bufA, bufB);
 }
 
@@ -51,10 +49,51 @@ function verifyPassword(password: string, storedHash: string, salt: string): boo
 }
 
 /* ---------- DB-backed credential checks ---------- */
+export async function getAdminCredential() {
+  const [existing] = await db
+    .select()
+    .from(adminCredentials)
+    .where(eq(adminCredentials.id, "admin"))
+    .limit(1);
+
+  if (existing) return existing;
+
+  const username = process.env.ADMIN_USERNAME;
+  const password = process.env.ADMIN_PASSWORD;
+  if (!username || !password) return null;
+
+  const { hash, salt } = hashPassword(password);
+  await db
+    .insert(adminCredentials)
+    .values({
+      id: "admin",
+      username,
+      passwordHash: hash,
+      passwordSalt: salt,
+    })
+    .onConflictDoNothing();
+
+  const [created] = await db
+    .select()
+    .from(adminCredentials)
+    .where(eq(adminCredentials.id, "admin"))
+    .limit(1);
+  return created ?? null;
+}
+
+export async function updateAdminCredential(
+  data: Partial<Pick<typeof adminCredentials.$inferInsert, "username" | "passwordHash" | "passwordSalt">>,
+) {
+  await db
+    .update(adminCredentials)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(adminCredentials.id, "admin"));
+}
+
 export async function isAuthConfigured(): Promise<boolean> {
   if (!process.env.AUTH_SECRET || process.env.AUTH_SECRET.length < 32) return false;
   try {
-    const cred = await prisma.adminCredential.findUnique({ where: { id: "admin" } });
+    const cred = await getAdminCredential();
     return Boolean(cred);
   } catch {
     return false;
@@ -66,7 +105,7 @@ export async function credentialsAreValid(
   password: string
 ): Promise<boolean> {
   try {
-    const cred = await prisma.adminCredential.findUnique({ where: { id: "admin" } });
+    const cred = await getAdminCredential();
     if (!cred) return false;
 
     const usernameMatch = safeCompare(username, cred.username);

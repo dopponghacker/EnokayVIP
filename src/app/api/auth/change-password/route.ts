@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/api-auth";
-import { credentialsAreValid, hashPassword } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import {
+  getAdminCredential,
+  hashPassword,
+  updateAdminCredential,
+} from "@/lib/auth";
 
 export async function POST(req: NextRequest) {
   const authError = requireAdmin(req);
@@ -33,7 +36,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Password must be at least 8 characters." }, { status: 400 });
     }
 
-    const cred = await prisma.adminCredential.findUnique({ where: { id: "admin" } });
+    const cred = await getAdminCredential();
     if (!cred) {
       return NextResponse.json({ error: "No admin credential found." }, { status: 500 });
     }
@@ -59,10 +62,7 @@ export async function POST(req: NextRequest) {
       updateData.passwordSalt = salt;
     }
 
-    await prisma.adminCredential.update({
-      where: { id: "admin" },
-      data: updateData,
-    });
+    await updateAdminCredential(updateData);
 
     return NextResponse.json({
       success: true,

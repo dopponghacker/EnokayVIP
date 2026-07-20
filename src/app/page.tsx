@@ -4,6 +4,8 @@ import Link from "next/link";
 import TrackRecord from "@/components/TrackRecord";
 import { getAllPublicMatches } from "@/lib/store";
 
+export const dynamic = "force-dynamic";
+
 const channelUrl = "https://whatsapp.com/channel/0029Vb6duVSH5JM4KZ2JxG3f";
 
 const packages = [

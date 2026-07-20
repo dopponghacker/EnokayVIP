@@ -1,206 +1,147 @@
-import { prisma } from "./prisma";
+import { randomUUID } from "node:crypto";
+import { and, eq } from "drizzle-orm";
+import { db } from "../../db";
+import { bookingCodes, publicMatches, vipTips } from "../../db/schema";
 import { VipTip, Tier, PublicMatch, BookingCode } from "./types";
 
-// --- VIP Tips ---
-export async function getVipTipsByTier(tier: Tier): Promise<VipTip[]> {
-  const tips = await prisma.vipTip.findMany({ where: { tier } });
-  return tips.map((t) => ({
-    id: t.id,
-    tier: t.tier as Tier,
-    homeTeam: t.homeTeam,
-    awayTeam: t.awayTeam,
-    prediction: t.prediction,
-    league: t.league,
-    time: t.time,
-    date: t.date,
-    odds: t.odds || "",
-  }));
-}
-
-export async function getAllVipTips(): Promise<VipTip[]> {
-  const tips = await prisma.vipTip.findMany();
-  return tips.map((t) => ({
-    id: t.id,
-    tier: t.tier as Tier,
-    homeTeam: t.homeTeam,
-    awayTeam: t.awayTeam,
-    prediction: t.prediction,
-    league: t.league,
-    time: t.time,
-    date: t.date,
-    odds: t.odds || "",
-  }));
-}
-
-export async function addVipTip(tip: Omit<VipTip, "id">): Promise<VipTip> {
-  const newTip = await prisma.vipTip.create({
-    data: {
-      tier: tip.tier,
-      homeTeam: tip.homeTeam,
-      awayTeam: tip.awayTeam,
-      prediction: tip.prediction,
-      league: tip.league,
-      time: tip.time,
-      date: tip.date,
-      odds: tip.odds,
-    },
-  });
+function toVipTip(row: typeof vipTips.$inferSelect): VipTip {
   return {
-    id: newTip.id,
-    tier: newTip.tier as Tier,
-    homeTeam: newTip.homeTeam,
-    awayTeam: newTip.awayTeam,
-    prediction: newTip.prediction,
-    league: newTip.league,
-    time: newTip.time,
-    date: newTip.date,
-    odds: newTip.odds || "",
+    id: row.id,
+    tier: row.tier as Tier,
+    homeTeam: row.homeTeam,
+    awayTeam: row.awayTeam,
+    prediction: row.prediction,
+    league: row.league,
+    time: row.time,
+    date: row.date,
+    odds: row.odds || "",
   };
 }
 
+function toPublicMatch(row: typeof publicMatches.$inferSelect): PublicMatch {
+  return {
+    id: row.id,
+    homeTeam: row.homeTeam,
+    awayTeam: row.awayTeam,
+    prediction: row.prediction,
+    league: row.league,
+    odds: row.odds || "",
+    date: row.date,
+    time: row.time,
+    status: row.status as PublicMatch["status"],
+  };
+}
+
+export async function getVipTipsByTier(tier: Tier): Promise<VipTip[]> {
+  const rows = await db.select().from(vipTips).where(eq(vipTips.tier, tier));
+  return rows.map(toVipTip);
+}
+
+export async function getAllVipTips(): Promise<VipTip[]> {
+  const rows = await db.select().from(vipTips);
+  return rows.map(toVipTip);
+}
+
+export async function addVipTip(tip: Omit<VipTip, "id">): Promise<VipTip> {
+  const [row] = await db
+    .insert(vipTips)
+    .values({ id: randomUUID(), ...tip })
+    .returning();
+  return toVipTip(row);
+}
+
 export async function updateVipTip(id: string, data: Partial<VipTip>): Promise<VipTip | undefined> {
-  try {
-    const updated = await prisma.vipTip.update({
-      where: { id },
-      data: {
-        ...(data.tier && { tier: data.tier }),
-        ...(data.homeTeam && { homeTeam: data.homeTeam }),
-        ...(data.awayTeam && { awayTeam: data.awayTeam }),
-        ...(data.prediction && { prediction: data.prediction }),
-        ...(data.league && { league: data.league }),
-        ...(data.time && { time: data.time }),
-        ...(data.date && { date: data.date }),
-        ...(data.odds !== undefined && { odds: data.odds }),
-      },
-    });
-    return {
-      id: updated.id,
-      tier: updated.tier as Tier,
-      homeTeam: updated.homeTeam,
-      awayTeam: updated.awayTeam,
-      prediction: updated.prediction,
-      league: updated.league,
-      time: updated.time,
-      date: updated.date,
-      odds: updated.odds || "",
-    };
-  } catch {
-    return undefined;
-  }
+  const [row] = await db
+    .update(vipTips)
+    .set({
+      ...(data.tier && { tier: data.tier }),
+      ...(data.homeTeam && { homeTeam: data.homeTeam }),
+      ...(data.awayTeam && { awayTeam: data.awayTeam }),
+      ...(data.prediction && { prediction: data.prediction }),
+      ...(data.league && { league: data.league }),
+      ...(data.time && { time: data.time }),
+      ...(data.date && { date: data.date }),
+      ...(data.odds !== undefined && { odds: data.odds }),
+      updatedAt: new Date(),
+    })
+    .where(eq(vipTips.id, id))
+    .returning();
+  return row ? toVipTip(row) : undefined;
 }
 
 export async function deleteVipTip(id: string): Promise<boolean> {
-  try {
-    await prisma.vipTip.delete({ where: { id } });
-    return true;
-  } catch {
-    return false;
-  }
+  const rows = await db.delete(vipTips).where(eq(vipTips.id, id)).returning({ id: vipTips.id });
+  return rows.length > 0;
 }
 
-// --- Booking Codes ---
 export async function getBookingCode(tier: Tier, date: string): Promise<BookingCode | null> {
-  const row = await prisma.bookingCode.findUnique({ where: { tier_date: { tier, date } } });
-  if (!row) return null;
-  return { id: row.id, tier: row.tier as Tier, date: row.date, code: row.code };
+  const [row] = await db
+    .select()
+    .from(bookingCodes)
+    .where(and(eq(bookingCodes.tier, tier), eq(bookingCodes.date, date)))
+    .limit(1);
+  return row ? { id: row.id, tier: row.tier as Tier, date: row.date, code: row.code } : null;
 }
 
 export async function upsertBookingCode(tier: Tier, date: string, code: string): Promise<BookingCode> {
-  const row = await prisma.bookingCode.upsert({
-    where: { tier_date: { tier, date } },
-    update: { code },
-    create: { tier, date, code },
-  });
+  const [row] = await db
+    .insert(bookingCodes)
+    .values({ id: randomUUID(), tier, date, code })
+    .onConflictDoUpdate({
+      target: [bookingCodes.tier, bookingCodes.date],
+      set: { code, updatedAt: new Date() },
+    })
+    .returning();
   return { id: row.id, tier: row.tier as Tier, date: row.date, code: row.code };
 }
 
 export async function deleteBookingCode(id: string): Promise<boolean> {
-  try {
-    await prisma.bookingCode.delete({ where: { id } });
-    return true;
-  } catch {
-    return false;
-  }
+  const rows = await db
+    .delete(bookingCodes)
+    .where(eq(bookingCodes.id, id))
+    .returning({ id: bookingCodes.id });
+  return rows.length > 0;
 }
 
-// --- Public Matches ---
 export async function getAllPublicMatches(): Promise<PublicMatch[]> {
-  const matches = await prisma.publicMatch.findMany();
-  return matches.map((m) => ({
-    id: m.id,
-    homeTeam: m.homeTeam,
-    awayTeam: m.awayTeam,
-    prediction: m.prediction,
-    league: m.league,
-    odds: m.odds || "",
-    date: m.date,
-    time: m.time,
-    status: m.status as "won" | "lost" | "pending",
-  }));
+  const rows = await db.select().from(publicMatches);
+  return rows.map(toPublicMatch);
 }
 
 export async function addPublicMatch(match: Omit<PublicMatch, "id">): Promise<PublicMatch> {
-  const newMatch = await prisma.publicMatch.create({
-    data: {
-      homeTeam: match.homeTeam,
-      awayTeam: match.awayTeam,
-      prediction: match.prediction,
-      league: match.league,
-      odds: match.odds,
-      date: match.date,
-      time: match.time,
-      status: match.status,
-    },
-  });
-  return {
-    id: newMatch.id,
-    homeTeam: newMatch.homeTeam,
-    awayTeam: newMatch.awayTeam,
-    prediction: newMatch.prediction,
-    league: newMatch.league,
-    odds: newMatch.odds || "",
-    date: newMatch.date,
-    time: newMatch.time,
-    status: newMatch.status as "won" | "lost" | "pending",
-  };
+  const [row] = await db
+    .insert(publicMatches)
+    .values({ id: randomUUID(), ...match })
+    .returning();
+  return toPublicMatch(row);
 }
 
-export async function updatePublicMatch(id: string, data: Partial<PublicMatch>): Promise<PublicMatch | undefined> {
-  try {
-    const updated = await prisma.publicMatch.update({
-      where: { id },
-      data: {
-        ...(data.homeTeam && { homeTeam: data.homeTeam }),
-        ...(data.awayTeam && { awayTeam: data.awayTeam }),
-        ...(data.prediction && { prediction: data.prediction }),
-        ...(data.league && { league: data.league }),
-        ...(data.odds !== undefined && { odds: data.odds }),
-        ...(data.date && { date: data.date }),
-        ...(data.time && { time: data.time }),
-        ...(data.status && { status: data.status }),
-      },
-    });
-    return {
-      id: updated.id,
-      homeTeam: updated.homeTeam,
-      awayTeam: updated.awayTeam,
-      prediction: updated.prediction,
-      league: updated.league,
-      odds: updated.odds || "",
-      date: updated.date,
-      time: updated.time,
-      status: updated.status as "won" | "lost" | "pending",
-    };
-  } catch {
-    return undefined;
-  }
+export async function updatePublicMatch(
+  id: string,
+  data: Partial<PublicMatch>,
+): Promise<PublicMatch | undefined> {
+  const [row] = await db
+    .update(publicMatches)
+    .set({
+      ...(data.homeTeam && { homeTeam: data.homeTeam }),
+      ...(data.awayTeam && { awayTeam: data.awayTeam }),
+      ...(data.prediction && { prediction: data.prediction }),
+      ...(data.league && { league: data.league }),
+      ...(data.odds !== undefined && { odds: data.odds }),
+      ...(data.date && { date: data.date }),
+      ...(data.time && { time: data.time }),
+      ...(data.status && { status: data.status }),
+      updatedAt: new Date(),
+    })
+    .where(eq(publicMatches.id, id))
+    .returning();
+  return row ? toPublicMatch(row) : undefined;
 }
 
 export async function deletePublicMatch(id: string): Promise<boolean> {
-  try {
-    await prisma.publicMatch.delete({ where: { id } });
-    return true;
-  } catch {
-    return false;
-  }
+  const rows = await db
+    .delete(publicMatches)
+    .where(eq(publicMatches.id, id))
+    .returning({ id: publicMatches.id });
+  return rows.length > 0;
 }

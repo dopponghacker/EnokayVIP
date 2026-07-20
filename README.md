@@ -46,7 +46,10 @@ npm run start
 
 ## Data storage
 
-Prediction records currently use the in-memory store in `src/lib/store.ts`.
-They reset when the server restarts and should be moved to a database before
-production deployment. Prediction APIs are protected by the admin session and
-are not used by the public landing page.
+Prediction records, booking codes, and admin credentials use Netlify Database
+through Drizzle ORM. The schema lives in `db/schema.ts`, and migrations in
+`netlify/database/migrations/` are applied automatically during deploys.
+
+The initial admin credential is created from `ADMIN_USERNAME` and
+`ADMIN_PASSWORD` on the first login attempt. Later changes made in the admin
+dashboard remain stored in the database.
