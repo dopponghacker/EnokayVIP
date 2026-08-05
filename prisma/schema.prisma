@@ -61,17 +61,17 @@ model BookingCode {
   @@map("booking_codes")
 }
 model Payment {
-  id          String   @id @default(cuid())
-  externalRef String   @unique
-  tier        String
-  amount      Float
-  currency    String   @default("GHS")
-  phone       String
-  channel     Int
-  status      String   @default("pending")
-  moolreId    String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id            String    @id @default(cuid())
+  paymentCode   String    @unique
+  email         String
+  tier          String
+  amount        Float
+  currency      String    @default("GHS")
+  status        String    @default("pending")
+  approvedAt    DateTime?
+  emailSentAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@map("payments")
 }

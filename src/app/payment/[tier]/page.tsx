@@ -1,31 +1,30 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Tier, TIER_META } from "@/lib/types";
 
-type Network = "mtn" | "telecel" | "airteltigo";
-type Step = "form" | "otp" | "prompt" | "success";
+type Step = "form" | "instructions";
 
-const NETWORKS: { id: Network; label: string; color: string }[] = [
-  { id: "mtn", label: "MTN MoMo", color: "bg-yellow-400 text-slate-950" },
-  { id: "telecel", label: "Telecel Cash", color: "bg-red-500 text-white" },
-  { id: "airteltigo", label: "AT Money", color: "bg-blue-600 text-white" },
-];
+interface PaymentData {
+  paymentCode: string;
+  amount: number;
+  tier: string;
+  tierLabel: string;
+  paymentNumber: string;
+  paymentName: string;
+  instructions: string;
+}
 
 export default function PaymentPage() {
   const { tier } = useParams<{ tier: string }>();
-  const router = useRouter();
 
   const [step, setStep] = useState<Step>("form");
-  const [network, setNetwork] = useState<Network>("mtn");
-  const [phone, setPhone] = useState("");
-  const [otp, setOtp] = useState("");
-  const [externalRef, setExternalRef] = useState<string | null>(null);
+  const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [paymentData, setPaymentData] = useState<PaymentData | null>(null);
 
   const tierKey = tier as Tier;
   const meta = TIER_META[tierKey];
@@ -43,7 +42,6 @@ export default function PaymentPage() {
       .catch(() => {});
     return () => {
       cancelled = true;
-      if (pollTimer.current) clearInterval(pollTimer.current);
     };
   }, [tierKey]);
 
@@ -62,49 +60,19 @@ export default function PaymentPage() {
     );
   }
 
-  async function post(url: string, body: Record<string, unknown>) {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Something went wrong. Try again.");
-    return data;
-  }
-
-  function startPolling(ref: string) {
-    if (pollTimer.current) clearInterval(pollTimer.current);
-    pollTimer.current = setInterval(async () => {
-      try {
-        const data = await post("/api/payment/status", { externalRef: ref });
-        if (data.granted) {
-          if (pollTimer.current) clearInterval(pollTimer.current);
-          setStep("success");
-          setTimeout(() => router.push(`/vip/${tierKey}`), 1200);
-        } else if (data.failed) {
-          if (pollTimer.current) clearInterval(pollTimer.current);
-          setStep("form");
-          setError("Payment failed or was declined. Please try again.");
-        }
-      } catch {
-        // keep polling; transient errors are fine
-      }
-    }, 4000);
-  }
-
   async function handleInitiate() {
     setLoading(true);
     setError(null);
     try {
-      const data = await post("/api/payment/initiate", { tier: tierKey, phone, network });
-      setExternalRef(data.externalRef);
-      if (data.step === "otp") {
-        setStep("otp");
-      } else {
-        setStep("prompt");
-        startPolling(data.externalRef);
-      }
+      const res = await fetch("/api/payment/initiate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tier: tierKey, email }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Something went wrong. Try again.");
+      setPaymentData(data);
+      setStep("instructions");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong. Try again.");
     } finally {
@@ -112,36 +80,8 @@ export default function PaymentPage() {
     }
   }
 
-  async function handleOtp() {
-    if (!externalRef) return;
-    setLoading(true);
-    setError(null);
-    try {
-      await post("/api/payment/otp", { externalRef, otp });
-      setStep("prompt");
-      startPolling(externalRef);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "OTP verification failed. Try again.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleManualCheck() {
-    if (!externalRef) return;
-    setLoading(true);
-    try {
-      const data = await post("/api/payment/status", { externalRef });
-      if (data.granted) {
-        if (pollTimer.current) clearInterval(pollTimer.current);
-        setStep("success");
-        setTimeout(() => router.push(`/vip/${tierKey}`), 800);
-      }
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
+  function copyToClipboard(text: string) {
+    navigator.clipboard.writeText(text).catch(() => {});
   }
 
   return (
@@ -199,125 +139,120 @@ export default function PaymentPage() {
 
           {step === "form" && (
             <>
-              <h2 className="text-base font-bold text-slate-900 mb-1">Pay with Mobile Money</h2>
+              <h2 className="text-base font-bold text-slate-900 mb-1">Get VIP Predictions</h2>
               <p className="text-xs text-slate-500 mb-5">
-                Secured by Moolre. You&apos;ll approve the payment on your phone.
+                Enter your email to receive predictions after payment confirmation.
               </p>
 
-              <label className="block text-xs font-semibold text-slate-700 mb-2">Network</label>
-              <div className="grid grid-cols-3 gap-2 mb-4">
-                {NETWORKS.map((n) => (
-                  <button
-                    key={n.id}
-                    type="button"
-                    onClick={() => setNetwork(n.id)}
-                    className={`min-h-[44px] rounded-lg text-xs font-bold border-2 transition px-2 ${
-                      network === n.id
-                        ? `${n.color} border-transparent shadow-sm`
-                        : "bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300"
-                    }`}
-                  >
-                    {n.label}
-                  </button>
-                ))}
-              </div>
-
-              <label htmlFor="phone" className="block text-xs font-semibold text-slate-700 mb-2">
-                Mobile Money number
+              <label htmlFor="email" className="block text-xs font-semibold text-slate-700 mb-2">
+                Email Address
               </label>
               <input
-                id="phone"
-                type="tel"
-                inputMode="tel"
-                placeholder="e.g. 0541234567"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
+                id="email"
+                type="email"
+                inputMode="email"
+                placeholder="your@email.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 className="w-full min-h-[48px] rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-900 placeholder:font-normal placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
               />
 
               <button
                 onClick={handleInitiate}
-                disabled={loading || phone.trim().length < 10}
+                disabled={loading || !email.includes("@")}
                 className="mt-5 w-full min-h-[48px] py-3.5 rounded-lg bg-teal-600 text-white font-bold text-sm hover:bg-teal-700 active:bg-teal-800 transition disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {loading ? (
-                  <><i className="fas fa-spinner fa-spin" /> Starting payment...</>
+                  <><i className="fas fa-spinner fa-spin" /> Generating code...</>
                 ) : (
-                  <>Pay GH₵{displayAmount} <i className="fas fa-arrow-right text-xs" /></>
+                  <>Continue <i className="fas fa-arrow-right text-xs" /></>
                 )}
               </button>
-              <p className="mt-3 text-[10px] text-slate-400 text-center">
-                <i className="fas fa-lock mr-1" />
-                Payments processed securely by Moolre
-              </p>
             </>
           )}
 
-          {step === "otp" && (
+          {step === "instructions" && paymentData && (
             <>
-              <h2 className="text-base font-bold text-slate-900 mb-1">Enter OTP</h2>
-              <p className="text-xs text-slate-500 mb-5">
-                A one-time code was sent by SMS to <span className="font-semibold text-slate-700">{phone}</span>.
-              </p>
-              <input
-                type="text"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={8}
-                placeholder="Enter code"
-                value={otp}
-                onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
-                className="w-full min-h-[48px] rounded-lg border border-slate-300 px-4 text-center text-lg font-black tracking-[0.3em] text-slate-900 placeholder:tracking-normal placeholder:text-sm placeholder:font-normal placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-              />
+              <div className="text-center mb-5">
+                <div className="w-14 h-14 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center mx-auto mb-3">
+                  <i className="fas fa-paper-plane text-xl" />
+                </div>
+                <h2 className="text-base font-bold text-slate-900">Send Payment</h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  Transfer the exact amount to the number below
+                </p>
+              </div>
+
+              {/* Payment Code */}
+              <div className="bg-slate-50 rounded-lg p-4 mb-4 text-center">
+                <p className="text-[10px] font-semibold text-slate-500 mb-1">YOUR PAYMENT CODE</p>
+                <p className="text-2xl font-black text-slate-950 tracking-wider">{paymentData.paymentCode}</p>
+                <button
+                  onClick={() => copyToClipboard(paymentData.paymentCode)}
+                  className="mt-2 text-[10px] text-teal-600 font-semibold hover:underline"
+                >
+                  <i className="fas fa-copy mr-1" /> Copy code
+                </button>
+              </div>
+
+              {/* Payment Details */}
+              <div className="space-y-3 mb-5">
+                <div className="flex items-center justify-between py-2 border-b border-slate-100">
+                  <span className="text-xs text-slate-500">Amount</span>
+                  <span className="text-sm font-bold text-slate-900">GH₵{paymentData.amount}</span>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b border-slate-100">
+                  <span className="text-xs text-slate-500">Send to</span>
+                  <span className="text-sm font-bold text-slate-900">{paymentData.paymentNumber}</span>
+                </div>
+                <div className="flex items-center justify-between py-2 border-b border-slate-100">
+                  <span className="text-xs text-slate-500">Name</span>
+                  <span className="text-sm font-bold text-slate-900">{paymentData.paymentName}</span>
+                </div>
+                <div className="flex items-center justify-between py-2">
+                  <span className="text-xs text-slate-500">Reference</span>
+                  <button
+                    onClick={() => copyToClipboard(paymentData.paymentCode)}
+                    className="text-sm font-bold text-teal-600 hover:underline"
+                  >
+                    {paymentData.paymentCode} <i className="fas fa-copy text-xs ml-1" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Instructions */}
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
+                <h3 className="text-xs font-bold text-amber-800 mb-2">
+                  <i className="fas fa-info-circle mr-1" /> How to pay
+                </h3>
+                <ol className="text-xs text-amber-700 space-y-1 list-decimal list-inside">
+                  <li>Open your Mobile Money app</li>
+                  <li>Select &quot;Send Money&quot;</li>
+                  <li>Enter number: <strong>{paymentData.paymentNumber}</strong></li>
+                  <li>Enter amount: <strong>GH₵{paymentData.amount}</strong></li>
+                  <li>Use code as reference: <strong>{paymentData.paymentCode}</strong></li>
+                  <li>Complete the transfer</li>
+                </ol>
+              </div>
+
+              {/* Status */}
+              <div className="text-center">
+                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-slate-100 text-slate-600 text-xs font-semibold">
+                  <i className="fas fa-clock" />
+                  Waiting for admin confirmation...
+                </div>
+                <p className="text-[10px] text-slate-400 mt-3">
+                  After confirming payment, the admin will review and send predictions to <strong>{paymentData.paymentCode}</strong>
+                </p>
+              </div>
+
               <button
-                onClick={handleOtp}
-                disabled={loading || otp.length < 4}
-                className="mt-5 w-full min-h-[48px] py-3.5 rounded-lg bg-teal-600 text-white font-bold text-sm hover:bg-teal-700 active:bg-teal-800 transition disabled:opacity-50 flex items-center justify-center gap-2"
+                onClick={() => { setStep("form"); setPaymentData(null); setError(null); }}
+                className="mt-4 w-full min-h-[44px] py-3 rounded-lg border border-slate-300 text-slate-700 font-bold text-xs hover:bg-slate-50 transition"
               >
-                {loading ? (
-                  <><i className="fas fa-spinner fa-spin" /> Verifying...</>
-                ) : (
-                  <>Verify &amp; Continue</>
-                )}
+                <i className="fas fa-arrow-left mr-2" /> Back
               </button>
             </>
-          )}
-
-          {step === "prompt" && (
-            <div className="text-center">
-              <div className="w-14 h-14 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center mx-auto mb-4">
-                <i className="fas fa-mobile-alt text-xl fa-beat" style={{ animationDuration: "2s" }} />
-              </div>
-              <h2 className="text-base font-bold text-slate-900">Approve on your phone</h2>
-              <p className="mt-2 text-xs text-slate-500 leading-relaxed">
-                A payment prompt for <span className="font-bold text-slate-700">GH₵{displayAmount}</span> was
-                sent to <span className="font-semibold text-slate-700">{phone}</span>.
-                Enter your MoMo PIN to approve it. If you don&apos;t see the prompt, dial{" "}
-                <span className="font-semibold text-slate-700">*170#</span> and check
-                &quot;My Approvals&quot;.
-              </p>
-              <div className="mt-5 flex items-center justify-center gap-2 text-xs text-slate-500">
-                <i className="fas fa-spinner fa-spin text-teal-600" />
-                Waiting for confirmation...
-              </div>
-              <button
-                onClick={handleManualCheck}
-                disabled={loading}
-                className="mt-5 w-full min-h-[44px] py-3 rounded-lg border border-slate-300 text-slate-700 font-bold text-xs hover:bg-slate-50 transition disabled:opacity-50"
-              >
-                I&apos;ve approved — check now
-              </button>
-            </div>
-          )}
-
-          {step === "success" && (
-            <div className="text-center py-4">
-              <div className="w-14 h-14 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center mx-auto mb-4">
-                <i className="fas fa-check text-xl" />
-              </div>
-              <h2 className="text-base font-bold text-slate-900">Payment confirmed!</h2>
-              <p className="mt-2 text-xs text-slate-500">Taking you to your VIP tips...</p>
-            </div>
           )}
         </div>
       </main>

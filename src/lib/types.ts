@@ -2,6 +2,8 @@ export type Tier = "accurate-odds" | "draw-tips" | "correct-score";
 
 export type MatchStatus = "won" | "lost" | "pending";
 
+export type PaymentStatus = "pending" | "approved" | "rejected" | "email_sent";
+
 export interface PublicMatch {
   id: string;
   homeTeam: string;
@@ -31,6 +33,19 @@ export interface BookingCode {
   tier: Tier;
   date: string;
   code: string;
+}
+
+export interface Payment {
+  id: string;
+  paymentCode: string;
+  email: string;
+  tier: Tier;
+  amount: number;
+  currency: string;
+  status: PaymentStatus;
+  approvedAt: string | null;
+  emailSentAt: string | null;
+  createdAt: string;
 }
 
 export const TIER_META: Record<Tier, { label: string; amount: number; description: string }> = {

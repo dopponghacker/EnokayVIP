@@ -4,14 +4,16 @@ import { prisma } from "@/lib/prisma";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { Tier, TIER_META } from "@/lib/types";
 import { getTierAmount } from "@/lib/pricing";
-import {
-  COLLECTION_CHANNELS,
-  CODE_OTP_REQUIRED,
-  CODE_PAYMENT_REQUESTED,
-  MoolreNetwork,
-  normalizeGhanaPhone,
-  transactPayment,
-} from "@/lib/moolre";
+
+function generatePaymentCode(): string {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const bytes = randomBytes(6);
+  let code = "ENK-";
+  for (let i = 0; i < 6; i++) {
+    code += chars[bytes[i] % chars.length];
+  }
+  return code;
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -24,66 +26,43 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { tier, phone, network } = await req.json();
+    const { tier, email } = await req.json();
 
     if (!tier || !(tier in TIER_META)) {
       return NextResponse.json({ error: "Invalid tier" }, { status: 400 });
     }
-    if (!network || !(network in COLLECTION_CHANNELS)) {
-      return NextResponse.json({ error: "Select a mobile network" }, { status: 400 });
-    }
-    const payer = normalizeGhanaPhone(String(phone ?? ""));
-    if (!payer) {
+
+    if (!email || typeof email !== "string" || !email.includes("@")) {
       return NextResponse.json(
-        { error: "Enter a valid Ghana mobile money number (e.g. 0541234567)" },
+        { error: "Please enter a valid email address" },
         { status: 400 }
       );
     }
 
     const meta = TIER_META[tier as Tier];
     const amount = await getTierAmount(tier as Tier);
-    const channel = COLLECTION_CHANNELS[network as MoolreNetwork];
-    const externalRef = `ENK-${Date.now()}-${randomBytes(4).toString("hex")}`;
+    const paymentCode = generatePaymentCode();
 
     await prisma.payment.create({
       data: {
-        externalRef,
+        paymentCode,
+        email: email.toLowerCase().trim(),
         tier,
         amount,
         currency: "GHS",
-        phone: payer,
-        channel,
         status: "pending",
       },
     });
 
-    const response = await transactPayment({
-      channel,
-      payer,
+    return NextResponse.json({
+      paymentCode,
       amount,
-      externalRef,
-      reference: `Enokay69 ${meta.label}`,
+      tier,
+      tierLabel: meta.label,
+      paymentNumber: "0500964516",
+      paymentName: "George Yankah",
+      instructions: `Send GH₵${amount} to ${process.env.PAYMENT_NAME || "George Yankah"} (${process.env.PAYMENT_PHONE || "0500964516"}) via Mobile Money. Use your payment code as reference.`,
     });
-
-    if (response.code === CODE_OTP_REQUIRED) {
-      return NextResponse.json({ step: "otp", externalRef });
-    }
-    if (response.code === CODE_PAYMENT_REQUESTED) {
-      return NextResponse.json({ step: "prompt", externalRef });
-    }
-    if (response.status === 1) {
-      // Accepted but in an unexpected phase — let the client poll status.
-      return NextResponse.json({ step: "prompt", externalRef });
-    }
-
-    await prisma.payment.update({
-      where: { externalRef },
-      data: { status: "failed" },
-    });
-    return NextResponse.json(
-      { error: response.message || "Payment could not be started. Try again." },
-      { status: 502 }
-    );
   } catch (error) {
     console.error("payment/initiate error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
