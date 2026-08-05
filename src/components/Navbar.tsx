@@ -6,7 +6,6 @@ import { useState } from "react";
 export default function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const links = [
-    { href: "/#packages", label: "Packages" },
     { href: "/#how-it-works", label: "How it works" },
   ];
 
@@ -20,7 +19,6 @@ export default function Navbar() {
 
         <div className="hidden md:flex items-center gap-8">
           {links.map((link) => <Link key={link.href} href={link.href} className="text-slate-300 hover:text-white transition text-sm font-semibold">{link.label}</Link>)}
-          <a href="#packages" className="rounded-full bg-teal-400 text-slate-950 px-5 py-2.5 text-sm font-extrabold hover:bg-teal-300 transition">View packages</a>
         </div>
 
         <button type="button" onClick={() => setMobileOpen(!mobileOpen)} className="md:hidden text-white h-10 w-10 rounded-xl hover:bg-white/10 transition" aria-expanded={mobileOpen} aria-label="Toggle navigation">
