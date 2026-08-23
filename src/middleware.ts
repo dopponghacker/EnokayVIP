@@ -19,11 +19,12 @@ export function middleware(request: NextRequest) {
     "Content-Security-Policy",
     [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com https://js.paystack.co",
       "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com",
       "font-src 'self' https://cdnjs.cloudflare.com https://fonts.gstatic.com",
       "img-src 'self' data: https: blob:",
-      "connect-src 'self'",
+      "connect-src 'self' https://api.paystack.co",
+      "frame-src 'self' https://paystack.co",
       "frame-ancestors 'none'",
     ].join("; ")
   );

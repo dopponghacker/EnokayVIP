@@ -2,7 +2,7 @@ export type Tier = "accurate-odds" | "draw-tips" | "correct-score";
 
 export type MatchStatus = "won" | "lost" | "pending";
 
-export type PaymentStatus = "pending" | "approved" | "rejected" | "email_sent";
+export type PaymentStatus = "pending" | "approved" | "rejected";
 
 export interface PublicMatch {
   id: string;

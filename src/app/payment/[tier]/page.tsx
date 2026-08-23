@@ -5,26 +5,29 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Tier, TIER_META } from "@/lib/types";
 
-type Step = "form" | "instructions";
+declare global {
+  interface Window {
+    PaystackPop?: {
+      setup: (config: Record<string, unknown>) => { openIframe: () => void };
+    };
+  }
+}
 
-interface PaymentData {
-  paymentCode: string;
+interface PaystackData {
+  accessCode: string;
+  reference: string;
   amount: number;
-  tier: string;
   tierLabel: string;
-  paymentNumber: string;
-  paymentName: string;
-  instructions: string;
+  email: string;
 }
 
 export default function PaymentPage() {
   const { tier } = useParams<{ tier: string }>();
 
-  const [step, setStep] = useState<Step>("form");
-  const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [paymentData, setPaymentData] = useState<PaymentData | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [success, setSuccess] = useState(false);
 
   const tierKey = tier as Tier;
   const meta = TIER_META[tierKey];
@@ -40,10 +43,17 @@ export default function PaymentPage() {
         }
       })
       .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [tierKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const script = document.createElement("script");
+    script.src = "https://js.paystack.co/v1/inline.js";
+    script.async = true;
+    document.head.appendChild(script);
+    return () => { document.head.removeChild(script); };
+  }, []);
 
   const displayAmount = amount ?? meta?.amount;
 
@@ -60,28 +70,75 @@ export default function PaymentPage() {
     );
   }
 
-  async function handleInitiate() {
+  async function handlePay() {
     setLoading(true);
     setError(null);
     try {
       const res = await fetch("/api/payment/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tier: tierKey, email }),
+        body: JSON.stringify({ tier: tierKey }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Something went wrong. Try again.");
-      setPaymentData(data);
-      setStep("instructions");
+
+      setTimeout(() => openPaystack(data), 500);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong. Try again.");
-    } finally {
       setLoading(false);
     }
   }
 
-  function copyToClipboard(text: string) {
-    navigator.clipboard.writeText(text).catch(() => {});
+  function openPaystack(data: PaystackData) {
+    if (!window.PaystackPop) {
+      setError("Payment system is loading. Please try again.");
+      setLoading(false);
+      return;
+    }
+
+    const handler = window.PaystackPop.setup({
+      key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
+      email: data.email,
+      amount: Math.round(data.amount * 100),
+      currency: "GHS",
+      ref: data.reference,
+      onClose: () => {
+        setLoading(false);
+        setError("Payment was cancelled. Click pay again when ready.");
+      },
+      callback: (response: { reference: string }) => {
+        handleVerification(response.reference);
+      },
+    });
+
+    handler.openIframe();
+  }
+
+  async function handleVerification(reference: string) {
+    setVerifying(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/payment/verify?reference=${encodeURIComponent(reference)}`);
+      const data = await res.json();
+      if (!res.ok || !data.verified) {
+        throw new Error(data.error || "Payment verification failed.");
+      }
+
+      if (data.paymentToken && data.cookieOptions) {
+        const opts = data.cookieOptions as { maxAge: number; path: string; sameSite: string; secure: boolean; httpOnly: boolean };
+        document.cookie = `enokay_payment=${data.paymentToken}; max-age=${opts.maxAge}; path=${opts.path}; samesite=${opts.sameSite};${opts.secure ? " secure" : ""}`;
+      }
+
+      setSuccess(true);
+      setTimeout(() => {
+        window.location.href = `/vip/${tierKey}`;
+      }, 3000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Verification failed. Contact support with your payment code.");
+    } finally {
+      setVerifying(false);
+      setLoading(false);
+    }
   }
 
   return (
@@ -103,7 +160,6 @@ export default function PaymentPage() {
       </header>
 
       <main className="max-w-lg mx-auto px-4 sm:px-6 py-8 sm:py-14">
-        {/* Tier Info Card */}
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 sm:p-6 mb-5">
           <div className="flex items-center gap-3 mb-4">
             <div className="w-11 h-11 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0">
@@ -125,10 +181,12 @@ export default function PaymentPage() {
             <div className="flex items-center gap-2 text-xs text-slate-600">
               <i className="fas fa-check-circle text-teal-500 shrink-0" /> Premium predictions for {meta.label}
             </div>
+            <div className="flex items-center gap-2 text-xs text-slate-600">
+              <i className="fas fa-check-circle text-teal-500 shrink-0" /> Instant delivery via email
+            </div>
           </div>
         </div>
 
-        {/* Payment Card */}
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 sm:p-6">
           {error && (
             <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-3.5 py-3 text-xs text-red-700 flex items-start gap-2">
@@ -137,122 +195,55 @@ export default function PaymentPage() {
             </div>
           )}
 
-          {step === "form" && (
-            <>
-              <h2 className="text-base font-bold text-slate-900 mb-1">Get VIP Predictions</h2>
-              <p className="text-xs text-slate-500 mb-5">
-                Enter your email to receive predictions after payment confirmation.
+          {success ? (
+            <div className="text-center py-6">
+              <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4">
+                <i className="fas fa-check text-3xl text-green-600" />
+              </div>
+              <h2 className="text-lg font-black text-slate-950">Payment Confirmed!</h2>
+              <p className="text-xs text-slate-400 mt-3">
+                Redirecting you to your VIP tips...
+              </p>
+            </div>
+          ) : verifying ? (
+            <div className="text-center py-6">
+              <div className="w-16 h-16 rounded-full bg-teal-100 flex items-center justify-center mx-auto mb-4">
+                <i className="fas fa-spinner fa-spin text-2xl text-teal-600" />
+              </div>
+              <h2 className="text-lg font-black text-slate-950">Verifying Payment...</h2>
+              <p className="text-sm text-slate-500 mt-2">Please wait while we confirm your payment.</p>
+            </div>
+          ) : (
+            <div className="text-center py-2">
+              <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center mx-auto mb-4">
+                <i className={`fas ${tierKey === "accurate-odds" ? "fa-crown" : tierKey === "draw-tips" ? "fa-handshake" : "fa-bullseye"} text-2xl`} />
+              </div>
+              <h2 className="text-lg font-black text-slate-950">{meta.label}</h2>
+              <p className="text-sm text-slate-500 mt-1">
+                You&apos;ll enter your email in the secure payment window.
               </p>
 
-              <label htmlFor="email" className="block text-xs font-semibold text-slate-700 mb-2">
-                Email Address
-              </label>
-              <input
-                id="email"
-                type="email"
-                inputMode="email"
-                placeholder="your@email.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full min-h-[48px] rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-900 placeholder:font-normal placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent"
-              />
-
               <button
-                onClick={handleInitiate}
-                disabled={loading || !email.includes("@")}
-                className="mt-5 w-full min-h-[48px] py-3.5 rounded-lg bg-teal-600 text-white font-bold text-sm hover:bg-teal-700 active:bg-teal-800 transition disabled:opacity-50 flex items-center justify-center gap-2"
+                onClick={handlePay}
+                disabled={loading}
+                className="mt-6 w-full min-h-[48px] py-3.5 rounded-lg bg-teal-600 text-white font-bold text-sm hover:bg-teal-700 active:bg-teal-800 transition disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {loading ? (
-                  <><i className="fas fa-spinner fa-spin" /> Generating code...</>
+                  <><i className="fas fa-spinner fa-spin" /> Opening Paystack...</>
                 ) : (
-                  <>Continue <i className="fas fa-arrow-right text-xs" /></>
+                  <>Pay GH₵{displayAmount} <i className="fas fa-arrow-right text-xs" /></>
                 )}
               </button>
-            </>
-          )}
 
-          {step === "instructions" && paymentData && (
-            <>
-              <div className="text-center mb-5">
-                <div className="w-14 h-14 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center mx-auto mb-3">
-                  <i className="fas fa-paper-plane text-xl" />
-                </div>
-                <h2 className="text-base font-bold text-slate-900">Send Payment</h2>
-                <p className="text-xs text-slate-500 mt-1">
-                  Transfer the exact amount to the number below
-                </p>
+              <div className="mt-4 flex items-center justify-center gap-4 text-[10px] text-slate-400">
+                <span className="flex items-center gap-1">
+                  <i className="fas fa-lock" /> Secure payment via Paystack
+                </span>
+                <span className="flex items-center gap-1">
+                  <i className="fas fa-bolt" /> Instant delivery
+                </span>
               </div>
-
-              {/* Payment Code */}
-              <div className="bg-slate-50 rounded-lg p-4 mb-4 text-center">
-                <p className="text-[10px] font-semibold text-slate-500 mb-1">YOUR PAYMENT CODE</p>
-                <p className="text-2xl font-black text-slate-950 tracking-wider">{paymentData.paymentCode}</p>
-                <button
-                  onClick={() => copyToClipboard(paymentData.paymentCode)}
-                  className="mt-2 text-[10px] text-teal-600 font-semibold hover:underline"
-                >
-                  <i className="fas fa-copy mr-1" /> Copy code
-                </button>
-              </div>
-
-              {/* Payment Details */}
-              <div className="space-y-3 mb-5">
-                <div className="flex items-center justify-between py-2 border-b border-slate-100">
-                  <span className="text-xs text-slate-500">Amount</span>
-                  <span className="text-sm font-bold text-slate-900">GH₵{paymentData.amount}</span>
-                </div>
-                <div className="flex items-center justify-between py-2 border-b border-slate-100">
-                  <span className="text-xs text-slate-500">Send to</span>
-                  <span className="text-sm font-bold text-slate-900">{paymentData.paymentNumber}</span>
-                </div>
-                <div className="flex items-center justify-between py-2 border-b border-slate-100">
-                  <span className="text-xs text-slate-500">Name</span>
-                  <span className="text-sm font-bold text-slate-900">{paymentData.paymentName}</span>
-                </div>
-                <div className="flex items-center justify-between py-2">
-                  <span className="text-xs text-slate-500">Reference</span>
-                  <button
-                    onClick={() => copyToClipboard(paymentData.paymentCode)}
-                    className="text-sm font-bold text-teal-600 hover:underline"
-                  >
-                    {paymentData.paymentCode} <i className="fas fa-copy text-xs ml-1" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Instructions */}
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
-                <h3 className="text-xs font-bold text-amber-800 mb-2">
-                  <i className="fas fa-info-circle mr-1" /> How to pay
-                </h3>
-                <ol className="text-xs text-amber-700 space-y-1 list-decimal list-inside">
-                  <li>Open your Mobile Money app</li>
-                  <li>Select &quot;Send Money&quot;</li>
-                  <li>Enter number: <strong>{paymentData.paymentNumber}</strong></li>
-                  <li>Enter amount: <strong>GH₵{paymentData.amount}</strong></li>
-                  <li>Use code as reference: <strong>{paymentData.paymentCode}</strong></li>
-                  <li>Complete the transfer</li>
-                </ol>
-              </div>
-
-              {/* Status */}
-              <div className="text-center">
-                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-slate-100 text-slate-600 text-xs font-semibold">
-                  <i className="fas fa-clock" />
-                  Waiting for admin confirmation...
-                </div>
-                <p className="text-[10px] text-slate-400 mt-3">
-                  After confirming payment, the admin will review and send predictions to <strong>{paymentData.paymentCode}</strong>
-                </p>
-              </div>
-
-              <button
-                onClick={() => { setStep("form"); setPaymentData(null); setError(null); }}
-                className="mt-4 w-full min-h-[44px] py-3 rounded-lg border border-slate-300 text-slate-700 font-bold text-xs hover:bg-slate-50 transition"
-              >
-                <i className="fas fa-arrow-left mr-2" /> Back
-              </button>
-            </>
+            </div>
           )}
         </div>
       </main>

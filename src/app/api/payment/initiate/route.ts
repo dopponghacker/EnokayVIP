@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { Tier, TIER_META } from "@/lib/types";
 import { getTierAmount } from "@/lib/pricing";
+import { initializeTransaction } from "@/lib/paystack";
 
 function generatePaymentCode(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -26,42 +27,50 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { tier, email } = await req.json();
+    const { tier } = await req.json();
 
     if (!tier || !(tier in TIER_META)) {
       return NextResponse.json({ error: "Invalid tier" }, { status: 400 });
     }
 
-    if (!email || typeof email !== "string" || !email.includes("@")) {
-      return NextResponse.json(
-        { error: "Please enter a valid email address" },
-        { status: 400 }
-      );
-    }
-
-    const meta = TIER_META[tier as Tier];
-    const amount = await getTierAmount(tier as Tier);
+    const tierKey = tier as Tier;
+    const meta = TIER_META[tierKey];
+    const amount = await getTierAmount(tierKey);
     const paymentCode = generatePaymentCode();
 
-    await prisma.payment.create({
+    const payment = await prisma.payment.create({
       data: {
         paymentCode,
-        email: email.toLowerCase().trim(),
-        tier,
+        email: "pending@enokay69.com",
+        tier: tierKey,
         amount,
         currency: "GHS",
         status: "pending",
       },
     });
 
+    const reference = paymentCode;
+    const amountInPesewas = Math.round(amount * 100);
+
+    const paystackResponse = await initializeTransaction({
+      email: "pending@enokay69.com",
+      amount: amountInPesewas,
+      reference,
+      currency: "GHS",
+      metadata: {
+        paymentId: payment.id,
+        tier: tierKey,
+        paymentCode,
+      },
+    });
+
     return NextResponse.json({
+      accessCode: paystackResponse.data.access_code,
+      reference,
       paymentCode,
       amount,
-      tier,
       tierLabel: meta.label,
-      paymentNumber: "0500964516",
-      paymentName: "George Yankah",
-      instructions: `Send GH₵${amount} to ${process.env.PAYMENT_NAME || "George Yankah"} (${process.env.PAYMENT_PHONE || "0500964516"}) via Mobile Money. Use your payment code as reference.`,
+      email: "pending@enokay69.com",
     });
   } catch (error) {
     console.error("payment/initiate error:", error);
