@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Tier, TIER_META } from "@/lib/types";
@@ -28,6 +28,8 @@ export default function PaymentPage() {
   const [error, setError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [scriptReady, setScriptReady] = useState(false);
+  const resolvingRef = useRef(false);
 
   const tierKey = tier as Tier;
   const meta = TIER_META[tierKey];
@@ -48,11 +50,23 @@ export default function PaymentPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    if (window.PaystackPop) {
+      setScriptReady(true);
+      return;
+    }
+
+    const existingScript = document.querySelector('script[src="https://js.paystack.co/v1/inline.js"]');
+    if (existingScript) {
+      existingScript.addEventListener("load", () => setScriptReady(true));
+      return;
+    }
+
     const script = document.createElement("script");
     script.src = "https://js.paystack.co/v1/inline.js";
-    script.async = true;
+    script.onload = () => setScriptReady(true);
+    script.onerror = () => setError("Failed to load payment system. Please refresh.");
     document.head.appendChild(script);
-    return () => { document.head.removeChild(script); };
   }, []);
 
   const displayAmount = amount ?? meta?.amount;
@@ -82,7 +96,13 @@ export default function PaymentPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Something went wrong. Try again.");
 
-      setTimeout(() => openPaystack(data), 500);
+      if (!window.PaystackPop) {
+        setError("Payment system is loading. Please try again in a moment.");
+        setLoading(false);
+        return;
+      }
+
+      openPaystack(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong. Try again.");
       setLoading(false);
@@ -90,13 +110,7 @@ export default function PaymentPage() {
   }
 
   function openPaystack(data: PaystackData) {
-    if (!window.PaystackPop) {
-      setError("Payment system is loading. Please try again.");
-      setLoading(false);
-      return;
-    }
-
-    const handler = window.PaystackPop.setup({
+    const handler = window.PaystackPop!.setup({
       key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
       email: data.email,
       amount: Math.round(data.amount * 100),
@@ -115,6 +129,8 @@ export default function PaymentPage() {
   }
 
   async function handleVerification(reference: string) {
+    if (resolvingRef.current) return;
+    resolvingRef.current = true;
     setVerifying(true);
     setError(null);
     try {
@@ -132,7 +148,7 @@ export default function PaymentPage() {
       setSuccess(true);
       setTimeout(() => {
         window.location.href = `/vip/${tierKey}`;
-      }, 3000);
+      }, 2000);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Verification failed. Contact support with your payment code.");
     } finally {
@@ -225,11 +241,13 @@ export default function PaymentPage() {
 
               <button
                 onClick={handlePay}
-                disabled={loading}
+                disabled={loading || !scriptReady}
                 className="mt-6 w-full min-h-[48px] py-3.5 rounded-lg bg-teal-600 text-white font-bold text-sm hover:bg-teal-700 active:bg-teal-800 transition disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {loading ? (
-                  <><i className="fas fa-spinner fa-spin" /> Opening Paystack...</>
+                  <><i className="fas fa-spinner fa-spin" /> Processing...</>
+                ) : !scriptReady ? (
+                  <><i className="fas fa-spinner fa-spin" /> Loading payment...</>
                 ) : (
                   <>Pay GH₵{displayAmount} <i className="fas fa-arrow-right text-xs" /></>
                 )}
