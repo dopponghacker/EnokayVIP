@@ -86,7 +86,7 @@ export default async function HomePage({
                 </div>
                 <div className="mt-7 flex flex-wrap gap-x-6 gap-y-2 text-xs text-slate-400">
                   <span><i className="fas fa-check text-teal-400 mr-1.5" />Expert reviewed</span>
-                  <span><i className="fas fa-check text-teal-400 mr-1.5" />Private delivery</span>
+                  <span><i className="fas fa-check text-teal-400 mr-1.5" />Instant access</span>
                   <span><i className="fas fa-check text-teal-400 mr-1.5" />Responsible approach</span>
                 </div>
               </div>

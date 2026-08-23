@@ -182,7 +182,7 @@ export default function PaymentPage() {
               <i className="fas fa-check-circle text-teal-500 shrink-0" /> Premium predictions for {meta.label}
             </div>
             <div className="flex items-center gap-2 text-xs text-slate-600">
-              <i className="fas fa-check-circle text-teal-500 shrink-0" /> Instant delivery via email
+              <i className="fas fa-check-circle text-teal-500 shrink-0" /> Instant access after payment
             </div>
           </div>
         </div>
@@ -240,7 +240,7 @@ export default function PaymentPage() {
                   <i className="fas fa-lock" /> Secure payment via Paystack
                 </span>
                 <span className="flex items-center gap-1">
-                  <i className="fas fa-bolt" /> Instant delivery
+                  <i className="fas fa-bolt" /> Instant access
                 </span>
               </div>
             </div>
