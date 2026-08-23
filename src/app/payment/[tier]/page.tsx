@@ -1,39 +1,27 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Tier, TIER_META } from "@/lib/types";
-
-declare global {
-  interface Window {
-    PaystackPop?: {
-      setup: (config: Record<string, unknown>) => { openIframe: () => void };
-    };
-  }
-}
-
-interface PaystackData {
-  accessCode: string;
-  reference: string;
-  amount: number;
-  tierLabel: string;
-  email: string;
-}
 
 export default function PaymentPage() {
   const { tier } = useParams<{ tier: string }>();
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [verifying, setVerifying] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [scriptReady, setScriptReady] = useState(false);
-  const resolvingRef = useRef(false);
 
   const tierKey = tier as Tier;
   const meta = TIER_META[tierKey];
   const [amount, setAmount] = useState<number | null>(null);
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const reference = urlParams.get("reference");
+    if (reference) {
+      window.location.href = `/payment/success?reference=${encodeURIComponent(reference)}`;
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,27 +35,6 @@ export default function PaymentPage() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, [tierKey]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    if (window.PaystackPop) {
-      setScriptReady(true);
-      return;
-    }
-
-    const existingScript = document.querySelector('script[src="https://js.paystack.co/v1/inline.js"]');
-    if (existingScript) {
-      existingScript.addEventListener("load", () => setScriptReady(true));
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = "https://js.paystack.co/v1/inline.js";
-    script.onload = () => setScriptReady(true);
-    script.onerror = () => setError("Failed to load payment system. Please refresh.");
-    document.head.appendChild(script);
-  }, []);
 
   const displayAmount = amount ?? meta?.amount;
 
@@ -96,63 +63,9 @@ export default function PaymentPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Something went wrong. Try again.");
 
-      if (!window.PaystackPop) {
-        setError("Payment system is loading. Please try again in a moment.");
-        setLoading(false);
-        return;
-      }
-
-      openPaystack(data);
+      window.location.href = data.authorizationUrl;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong. Try again.");
-      setLoading(false);
-    }
-  }
-
-  function openPaystack(data: PaystackData) {
-    const handler = window.PaystackPop!.setup({
-      key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
-      email: data.email,
-      amount: Math.round(data.amount * 100),
-      currency: "GHS",
-      ref: data.reference,
-      onClose: () => {
-        setLoading(false);
-        setError("Payment was cancelled. Click pay again when ready.");
-      },
-      callback: (response: { reference: string }) => {
-        handleVerification(response.reference);
-      },
-    });
-
-    handler.openIframe();
-  }
-
-  async function handleVerification(reference: string) {
-    if (resolvingRef.current) return;
-    resolvingRef.current = true;
-    setVerifying(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/payment/verify?reference=${encodeURIComponent(reference)}`);
-      const data = await res.json();
-      if (!res.ok || !data.verified) {
-        throw new Error(data.error || "Payment verification failed.");
-      }
-
-      if (data.paymentToken && data.cookieOptions) {
-        const opts = data.cookieOptions as { maxAge: number; path: string; sameSite: string; secure: boolean; httpOnly: boolean };
-        document.cookie = `enokay_payment=${data.paymentToken}; max-age=${opts.maxAge}; path=${opts.path}; samesite=${opts.sameSite};${opts.secure ? " secure" : ""}`;
-      }
-
-      setSuccess(true);
-      setTimeout(() => {
-        window.location.href = `/vip/${tierKey}`;
-      }, 2000);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Verification failed. Contact support with your payment code.");
-    } finally {
-      setVerifying(false);
       setLoading(false);
     }
   }
@@ -211,58 +124,36 @@ export default function PaymentPage() {
             </div>
           )}
 
-          {success ? (
-            <div className="text-center py-6">
-              <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4">
-                <i className="fas fa-check text-3xl text-green-600" />
-              </div>
-              <h2 className="text-lg font-black text-slate-950">Payment Confirmed!</h2>
-              <p className="text-xs text-slate-400 mt-3">
-                Redirecting you to your VIP tips...
-              </p>
+          <div className="text-center py-2">
+            <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center mx-auto mb-4">
+              <i className={`fas ${tierKey === "accurate-odds" ? "fa-crown" : tierKey === "draw-tips" ? "fa-handshake" : "fa-bullseye"} text-2xl`} />
             </div>
-          ) : verifying ? (
-            <div className="text-center py-6">
-              <div className="w-16 h-16 rounded-full bg-teal-100 flex items-center justify-center mx-auto mb-4">
-                <i className="fas fa-spinner fa-spin text-2xl text-teal-600" />
-              </div>
-              <h2 className="text-lg font-black text-slate-950">Verifying Payment...</h2>
-              <p className="text-sm text-slate-500 mt-2">Please wait while we confirm your payment.</p>
-            </div>
-          ) : (
-            <div className="text-center py-2">
-              <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center mx-auto mb-4">
-                <i className={`fas ${tierKey === "accurate-odds" ? "fa-crown" : tierKey === "draw-tips" ? "fa-handshake" : "fa-bullseye"} text-2xl`} />
-              </div>
-              <h2 className="text-lg font-black text-slate-950">{meta.label}</h2>
-              <p className="text-sm text-slate-500 mt-1">
-                You&apos;ll enter your email in the secure payment window.
-              </p>
+            <h2 className="text-lg font-black text-slate-950">{meta.label}</h2>
+            <p className="text-sm text-slate-500 mt-1">
+              You&apos;ll be redirected to Paystack to complete payment.
+            </p>
 
-              <button
-                onClick={handlePay}
-                disabled={loading || !scriptReady}
-                className="mt-6 w-full min-h-[48px] py-3.5 rounded-lg bg-teal-600 text-white font-bold text-sm hover:bg-teal-700 active:bg-teal-800 transition disabled:opacity-50 flex items-center justify-center gap-2"
-              >
-                {loading ? (
-                  <><i className="fas fa-spinner fa-spin" /> Processing...</>
-                ) : !scriptReady ? (
-                  <><i className="fas fa-spinner fa-spin" /> Loading payment...</>
-                ) : (
-                  <>Pay GH₵{displayAmount} <i className="fas fa-arrow-right text-xs" /></>
-                )}
-              </button>
+            <button
+              onClick={handlePay}
+              disabled={loading}
+              className="mt-6 w-full min-h-[48px] py-3.5 rounded-lg bg-teal-600 text-white font-bold text-sm hover:bg-teal-700 active:bg-teal-800 transition disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {loading ? (
+                <><i className="fas fa-spinner fa-spin" /> Redirecting to Paystack...</>
+              ) : (
+                <>Pay GH₵{displayAmount} <i className="fas fa-arrow-right text-xs" /></>
+              )}
+            </button>
 
-              <div className="mt-4 flex items-center justify-center gap-4 text-[10px] text-slate-400">
-                <span className="flex items-center gap-1">
-                  <i className="fas fa-lock" /> Secure payment via Paystack
-                </span>
-                <span className="flex items-center gap-1">
-                  <i className="fas fa-bolt" /> Instant access
-                </span>
-              </div>
+            <div className="mt-4 flex items-center justify-center gap-4 text-[10px] text-slate-400">
+              <span className="flex items-center gap-1">
+                <i className="fas fa-lock" /> Secure payment via Paystack
+              </span>
+              <span className="flex items-center gap-1">
+                <i className="fas fa-bolt" /> Instant access
+              </span>
             </div>
-          )}
+          </div>
         </div>
       </main>
     </div>

@@ -65,12 +65,11 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json({
-      accessCode: paystackResponse.data.access_code,
+      authorizationUrl: paystackResponse.data.authorization_url,
       reference,
       paymentCode,
       amount,
       tierLabel: meta.label,
-      email: "pending@enokay69.com",
     });
   } catch (error) {
     console.error("payment/initiate error:", error);
