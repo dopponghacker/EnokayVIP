@@ -18,7 +18,7 @@ const packageMeta = [
     features: ["Expert-reviewed fixtures", "Clear odds and kick-off times", "Valid for 24 hours"],
   },
   {
-    name: "Draw Tips",
+    name: "Midnight Banker",
     slug: "draw-tips" as const,
     description: "Focused draw selections for bettors who prefer higher-value markets.",
     icon: "fa-handshake",

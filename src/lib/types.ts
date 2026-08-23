@@ -55,7 +55,7 @@ export const TIER_META: Record<Tier, { label: string; amount: number; descriptio
     description: "A carefully selected premium slip built around disciplined value.",
   },
   "draw-tips": {
-    label: "Draw Tips",
+    label: "Midnight Banker",
     amount: 100,
     description: "Focused draw selections for bettors who prefer higher-value markets.",
   },
