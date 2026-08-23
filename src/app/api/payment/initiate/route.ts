@@ -33,6 +33,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid tier" }, { status: 400 });
     }
 
+    const host = req.headers.get("host") || "enokayvvp.com";
+    const protocol = req.headers.get("x-forwarded-proto") || "https";
+    const baseUrl = `${protocol}://${host}`;
+
     const tierKey = tier as Tier;
     const meta = TIER_META[tierKey];
     const amount = await getTierAmount(tierKey);
@@ -57,6 +61,7 @@ export async function POST(req: NextRequest) {
       amount: amountInPesewas,
       reference,
       currency: "GHS",
+      callback_url: `${baseUrl}/payment/success`,
       metadata: {
         paymentId: payment.id,
         tier: tierKey,
