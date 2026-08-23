@@ -192,16 +192,6 @@ export default function VipPage() {
           </>
         )}
 
-        {/* Footer note */}
-        <div className="mt-8 bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
-          <i className="fas fa-exclamation-triangle text-amber-500 text-sm mt-0.5 shrink-0" />
-          <div>
-            <p className="text-xs font-bold text-slate-900">Disclaimer</p>
-            <p className="text-[11px] text-slate-600 leading-relaxed mt-1">
-              Predictions are based on analysis and are not guaranteed outcomes. Bet responsibly.
-            </p>
-          </div>
-        </div>
       </main>
 
       {/* Screenshot Overlay */}

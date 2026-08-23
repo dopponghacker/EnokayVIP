@@ -787,7 +787,6 @@ export default function AdminPage() {
                             </span>
                           </div>
                           <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
-                            <span><i className="fas fa-envelope mr-1" />{payment.email}</span>
                             <span><i className="fas fa-crown mr-1" />{TIER_META[payment.tier as Tier]?.label || payment.tier}</span>
                             <span className="font-bold text-gray-700">GH₵{payment.amount}</span>
                           </div>
