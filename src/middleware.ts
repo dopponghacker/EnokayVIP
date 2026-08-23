@@ -4,7 +4,6 @@ import type { NextRequest } from "next/server";
 export function middleware(request: NextRequest) {
   const response = NextResponse.next();
 
-  response.headers.set("X-Frame-Options", "DENY");
   response.headers.set("X-Content-Type-Options", "nosniff");
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   response.headers.set(
@@ -24,7 +23,7 @@ export function middleware(request: NextRequest) {
       "font-src 'self' https://cdnjs.cloudflare.com https://fonts.gstatic.com",
       "img-src 'self' data: https: blob:",
       "connect-src 'self' https://api.paystack.co",
-      "frame-src 'self' https://paystack.co",
+      "frame-src 'self' https://*.paystack.co https://paystack.co",
       "frame-ancestors 'none'",
     ].join("; ")
   );
