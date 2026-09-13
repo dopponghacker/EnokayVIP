@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { VipTip, PublicMatch, MatchStatus, Tier, TIER_META, BookingCode, Payment } from "@/lib/types";
+import { VipTip, PublicMatch, MatchStatus, Tier, TIER_META, BookingCode, Payment, PaymentStatus } from "@/lib/types";
 import Link from "next/link";
 import LogoutButton from "@/components/LogoutButton";
 import { useRouter } from "next/navigation";
@@ -43,6 +43,13 @@ const statusStyles: Record<MatchStatus, string> = {
   won: "bg-green-100 text-green-700",
   lost: "bg-red-100 text-red-700",
   pending: "bg-amber-100 text-amber-700",
+};
+
+const paymentStatusStyles: Record<PaymentStatus, string> = {
+  pending: "bg-amber-100 text-amber-700",
+  approved: "bg-blue-100 text-blue-700",
+  rejected: "bg-red-100 text-red-700",
+  email_sent: "bg-green-100 text-green-700",
 };
 
 type AdminTab = "vip" | "matches" | "payments" | "settings";
@@ -96,6 +103,9 @@ export default function AdminPage() {
   // Payments state
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loadingPayments, setLoadingPayments] = useState(true);
+  const [paymentFilter, setPaymentFilter] = useState<"all" | PaymentStatus>("all");
+  const [approvingPayment, setApprovingPayment] = useState<string | null>(null);
+  const [rejectingPayment, setRejectingPayment] = useState<string | null>(null);
 
   const adminRequest = useCallback(async (url: string, init?: RequestInit) => {
     const response = await fetch(url, init);
@@ -136,7 +146,7 @@ export default function AdminPage() {
   const fetchPayments = useCallback(async () => {
     setLoadingPayments(true);
     try {
-      const res = await adminRequest(`/api/admin/payments?status=approved`);
+      const res = await adminRequest(`/api/admin/payments?status=${paymentFilter}`);
       const data = await res.json();
       setPayments(data);
     } catch (err) {
@@ -144,7 +154,7 @@ export default function AdminPage() {
     } finally {
       setLoadingPayments(false);
     }
-  }, [adminRequest]);
+  }, [adminRequest, paymentFilter]);
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -200,6 +210,58 @@ export default function AdminPage() {
       .catch(() => {})
       .finally(() => setLoadingPrices(false));
   }, [tab]);
+
+  // --- Payment handlers ---
+  async function handleApprovePayment(id: string) {
+    const confirmed = await alert({
+      title: "Approve payment?",
+      message: "This will grant VIP access and send predictions to the customer's email.",
+      variant: "confirm",
+      confirmText: "Approve",
+      cancelText: "Cancel",
+    });
+    if (!confirmed) return;
+    setApprovingPayment(id);
+    setError("");
+    try {
+      const res = await adminRequest(`/api/admin/payments/${id}/approve`, { method: "POST" });
+      const data = await res.json();
+      if (data.emailSent) {
+        addToast("Payment approved and email sent!", "success");
+      } else if (data.emailError) {
+        addToast(`Payment approved but email failed: ${data.emailError}`, "error");
+      } else {
+        addToast("Payment approved!", "success");
+      }
+      await fetchPayments();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to approve payment.");
+    } finally {
+      setApprovingPayment(null);
+    }
+  }
+
+  async function handleRejectPayment(id: string) {
+    const confirmed = await alert({
+      title: "Reject payment?",
+      message: "This payment will be marked as rejected.",
+      variant: "confirm",
+      confirmText: "Reject",
+      cancelText: "Cancel",
+    });
+    if (!confirmed) return;
+    setRejectingPayment(id);
+    setError("");
+    try {
+      await adminRequest(`/api/admin/payments/${id}/reject`, { method: "POST" });
+      addToast("Payment rejected", "success");
+      await fetchPayments();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to reject payment.");
+    } finally {
+      setRejectingPayment(null);
+    }
+  }
 
   async function handleSavePrices(e: React.FormEvent) {
     e.preventDefault();
@@ -428,6 +490,11 @@ export default function AdminPage() {
             className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition ${tab === "payments" ? "bg-slate-900 text-white" : "bg-white text-gray-600 border border-gray-200 hover:border-gray-300"}`}
           >
             <i className="fas fa-credit-card text-xs" /> Payments
+            {payments.filter((p) => p.status === "pending").length > 0 && (
+              <span className={`text-[10px] font-bold rounded-full px-1.5 py-0.5 bg-amber-500 text-white`}>
+                {payments.filter((p) => p.status === "pending").length}
+              </span>
+            )}
           </button>
           <button
             onClick={() => { setTab("settings"); handleCancel(); handleMatchCancel(); }}
@@ -740,19 +807,40 @@ export default function AdminPage() {
         {tab === "payments" && (
           <>
             {/* Payment Stats */}
-            <div className="grid grid-cols-3 gap-3 mb-6">
+            <div className="grid grid-cols-4 gap-3 mb-6">
               <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
                 <div className="text-2xl font-black text-slate-900">{payments.length}</div>
-                <div className="text-xs text-gray-500 font-medium">Total Payments</div>
+                <div className="text-xs text-gray-500 font-medium">Total</div>
               </div>
               <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
-                <div className="text-2xl font-black text-teal-600">GH₵{payments.reduce((sum, p) => sum + p.amount, 0)}</div>
-                <div className="text-xs text-gray-500 font-medium">Total Revenue</div>
+                <div className="text-2xl font-black text-amber-600">{payments.filter((p) => p.status === "pending").length}</div>
+                <div className="text-xs text-gray-500 font-medium">Pending</div>
               </div>
               <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
-                <div className="text-2xl font-black text-blue-600">{payments.filter((p) => p.tier === "correct-score").length}</div>
-                <div className="text-xs text-gray-500 font-medium">Correct Score</div>
+                <div className="text-2xl font-black text-blue-600">{payments.filter((p) => p.status === "approved").length}</div>
+                <div className="text-xs text-gray-500 font-medium">Approved</div>
               </div>
+              <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
+                <div className="text-2xl font-black text-green-600">{payments.filter((p) => p.status === "email_sent").length}</div>
+                <div className="text-xs text-gray-500 font-medium">Email Sent</div>
+              </div>
+            </div>
+
+            {/* Filter */}
+            <div className="flex items-center gap-2 mb-6 overflow-x-auto pb-1">
+              {(["all", "pending", "approved", "rejected", "email_sent"] as const).map((filter) => (
+                <button
+                  key={filter}
+                  onClick={() => { setPaymentFilter(filter); setLoadingPayments(true); }}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+                    paymentFilter === filter
+                      ? "bg-slate-900 text-white"
+                      : "bg-white text-gray-600 border border-gray-200 hover:border-gray-300"
+                  }`}
+                >
+                  {filter === "all" ? "All" : filter === "email_sent" ? "Email Sent" : filter.charAt(0).toUpperCase() + filter.slice(1)}
+                </button>
+              ))}
             </div>
 
             {/* Payments List */}
@@ -761,7 +849,6 @@ export default function AdminPage() {
                 <h3 className="text-sm font-bold text-gray-900">
                   <i className="fas fa-credit-card text-gray-400 mr-2" />
                   Payments ({payments.length})
-                  <span className="text-xs font-normal text-gray-400 ml-2">Auto-verified via Paystack</span>
                 </h3>
               </div>
               {loadingPayments ? (
@@ -782,19 +869,41 @@ export default function AdminPage() {
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-sm font-bold text-gray-900 font-mono">{payment.paymentCode}</span>
-                            <span className="text-[10px] font-bold rounded-full px-2 py-0.5 bg-green-100 text-green-700">
-                              Paid
+                            <span className={`text-[10px] font-bold rounded-full px-2 py-0.5 ${paymentStatusStyles[payment.status]}`}>
+                              {payment.status === "email_sent" ? "Email Sent" : payment.status.charAt(0).toUpperCase() + payment.status.slice(1)}
                             </span>
                           </div>
                           <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                            <span><i className="fas fa-envelope mr-1" />{payment.email}</span>
                             <span><i className="fas fa-crown mr-1" />{TIER_META[payment.tier as Tier]?.label || payment.tier}</span>
                             <span className="font-bold text-gray-700">GH₵{payment.amount}</span>
                           </div>
                           <div className="text-[10px] text-gray-400 mt-1">
                             {new Date(payment.createdAt).toLocaleString()}
-                            {payment.approvedAt && ` • Paid ${new Date(payment.approvedAt).toLocaleString()}`}
+                            {payment.approvedAt && ` • Approved ${new Date(payment.approvedAt).toLocaleString()}`}
+                            {payment.emailSentAt && ` • Email sent ${new Date(payment.emailSentAt).toLocaleString()}`}
                           </div>
                         </div>
+                        {payment.status === "pending" && (
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              onClick={() => handleApprovePayment(payment.id)}
+                              disabled={approvingPayment === payment.id}
+                              className="admin-btn admin-btn-primary text-xs"
+                            >
+                              <i className={`fas ${approvingPayment === payment.id ? "fa-spinner fa-spin" : "fa-check"}`} />
+                              <span className="hidden sm:inline">{approvingPayment === payment.id ? "..." : "Approve"}</span>
+                            </button>
+                            <button
+                              onClick={() => handleRejectPayment(payment.id)}
+                              disabled={rejectingPayment === payment.id}
+                              className="admin-btn admin-btn-danger text-xs"
+                            >
+                              <i className={`fas ${rejectingPayment === payment.id ? "fa-spinner fa-spin" : "fa-times"}`} />
+                              <span className="hidden sm:inline">{rejectingPayment === payment.id ? "..." : "Reject"}</span>
+                            </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -813,7 +922,7 @@ export default function AdminPage() {
               Package Pricing
             </h3>
             <p className="text-xs text-gray-500 mb-5">
-              Set the amount customers pay for each VIP package. Changes apply immediately to the website and Paystack.
+              Set the amount customers pay for each VIP package. Changes apply immediately to the website and Mobile Money charges.
             </p>
             {loadingPrices ? (
               <div className="py-6 text-center">
