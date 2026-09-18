@@ -67,6 +67,9 @@ export default function PaymentPage() {
       .then((res) => res.json())
       .then((data) => {
         if (data.error) throw new Error(data.error);
+        if (!data.paymentReference || !data.widgetSessionToken) {
+          throw new Error("Payment gateway failed to initialize. Please try again later.");
+        }
         setPaymentData(data);
       })
       .catch((e) => {

@@ -45,21 +45,17 @@ export async function POST(req: NextRequest) {
     let widgetSessionToken: string | null = null;
     let rushpayPaymentRef: string | null = null;
 
-    try {
-      const rushpayPayment = await createRushPayPayment(
-        amount,
-        `Enokay69 - ${meta.label}`,
-        paymentCode
-      );
+    const rushpayPayment = await createRushPayPayment(
+      amount,
+      `Enokay69 - ${meta.label}`,
+      paymentCode
+    );
 
-      rushpayRef = rushpayPayment.data.payment_reference;
-      rushpayPaymentRef = rushpayPayment.data.payment_reference;
+    rushpayRef = rushpayPayment.data.payment_reference;
+    rushpayPaymentRef = rushpayPayment.data.payment_reference;
 
-      const widgetSession = await createRushPayWidgetSession(rushpayRef);
-      widgetSessionToken = widgetSession.data.widget_session_token;
-    } catch (rushpayError) {
-      console.error("RushPay API error:", rushpayError);
-    }
+    const widgetSession = await createRushPayWidgetSession(rushpayRef);
+    widgetSessionToken = widgetSession.data.widget_session_token;
 
     await prisma.payment.create({
       data: {
