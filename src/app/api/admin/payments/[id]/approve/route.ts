@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/api-auth";
-import { createPaymentToken, paymentCookieOptions } from "@/lib/auth";
 import { sendVipTipsEmail } from "@/lib/email";
 import { Tier, VipTip, BookingCode } from "@/lib/types";
 
@@ -67,26 +66,27 @@ export async function POST(
         }
       : null;
 
-    const emailResult = await sendVipTipsEmail(payment.email, tier, vipTips, bookingCode);
+    let emailResult: { success: boolean; error?: string } = { success: false, error: "No email address available" };
 
-    if (emailResult.success) {
-      await prisma.payment.update({
-        where: { id },
-        data: {
-          status: "email_sent",
-          emailSentAt: new Date(),
-        },
-      });
+    if (payment.email) {
+      emailResult = await sendVipTipsEmail(payment.email, tier, vipTips, bookingCode);
+
+      if (emailResult.success) {
+        await prisma.payment.update({
+          where: { id },
+          data: {
+            status: "email_sent",
+            emailSentAt: new Date(),
+          },
+        });
+      }
     }
-
-    const paymentToken = createPaymentToken(tier);
 
     return NextResponse.json({
       success: true,
       emailSent: emailResult.success,
       emailError: emailResult.error,
-      paymentToken,
-      paymentCookieOptions,
+      hasEmail: !!payment.email,
     });
   } catch (error) {
     console.error("admin/payments/approve error:", error);

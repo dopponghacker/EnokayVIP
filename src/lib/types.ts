@@ -43,6 +43,7 @@ export interface Payment {
   amount: number;
   currency: string;
   status: PaymentStatus;
+  rushpayRef: string | null;
   approvedAt: string | null;
   emailSentAt: string | null;
   createdAt: string;

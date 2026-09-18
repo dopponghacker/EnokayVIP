@@ -4,6 +4,10 @@ import { prisma } from "@/lib/prisma";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { Tier, TIER_META } from "@/lib/types";
 import { getTierAmount } from "@/lib/pricing";
+import {
+  createRushPayPayment,
+  createRushPayWidgetSession,
+} from "@/lib/rushpay";
 
 function generatePaymentCode(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -17,7 +21,8 @@ function generatePaymentCode(): string {
 
 export async function POST(req: NextRequest) {
   try {
-    const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+    const ip =
+      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
     const limit = checkRateLimit(`pay-init:${ip}`, 10, 15 * 60 * 1000);
     if (!limit.allowed) {
       return NextResponse.json(
@@ -26,31 +31,45 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { tier, email } = await req.json();
+    const { tier } = await req.json();
 
     if (!tier || !(tier in TIER_META)) {
       return NextResponse.json({ error: "Invalid tier" }, { status: 400 });
-    }
-
-    if (!email || typeof email !== "string" || !email.includes("@")) {
-      return NextResponse.json(
-        { error: "Please enter a valid email address" },
-        { status: 400 }
-      );
     }
 
     const meta = TIER_META[tier as Tier];
     const amount = await getTierAmount(tier as Tier);
     const paymentCode = generatePaymentCode();
 
+    let rushpayRef: string | null = null;
+    let widgetSessionToken: string | null = null;
+    let rushpayPaymentRef: string | null = null;
+
+    try {
+      const rushpayPayment = await createRushPayPayment(
+        amount,
+        `Enokay69 - ${meta.label}`,
+        paymentCode
+      );
+
+      rushpayRef = rushpayPayment.data.payment_reference;
+      rushpayPaymentRef = rushpayPayment.data.payment_reference;
+
+      const widgetSession = await createRushPayWidgetSession(rushpayRef);
+      widgetSessionToken = widgetSession.data.widget_session_token;
+    } catch (rushpayError) {
+      console.error("RushPay API error:", rushpayError);
+    }
+
     await prisma.payment.create({
       data: {
         paymentCode,
-        email: email.toLowerCase().trim(),
+        email: "",
         tier,
         amount,
         currency: "GHS",
         status: "pending",
+        rushpayRef: rushpayRef,
       },
     });
 
@@ -59,12 +78,14 @@ export async function POST(req: NextRequest) {
       amount,
       tier,
       tierLabel: meta.label,
-      paymentNumber: process.env.PAYMENT_PHONE || "0500964516",
-      paymentName: process.env.PAYMENT_NAME || "George Yankah",
-      instructions: `Send GH₵${amount} to ${process.env.PAYMENT_NAME || "George Yankah"} (${process.env.PAYMENT_PHONE || "0500964516"}) via Mobile Money. Use your payment code as reference.`,
+      widgetSessionToken,
+      paymentReference: rushpayPaymentRef,
     });
   } catch (error) {
     console.error("payment/initiate error:", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
   }
 }
