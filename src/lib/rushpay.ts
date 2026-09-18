@@ -16,11 +16,12 @@ function getWebhookSecret(): string {
 
 async function rushpayFetch(path: string, options: RequestInit = {}) {
   const url = `${RUSHPAY_API_BASE}${path}`;
+  const apiKey = getApiKey();
   const res = await fetch(url, {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      "X-API-Key": getApiKey(),
+      "X-API-Key": apiKey,
       ...options.headers,
     },
   });
@@ -29,6 +30,7 @@ async function rushpayFetch(path: string, options: RequestInit = {}) {
   if (!res.ok) {
     const message =
       body?.message || body?.error || `RushPay API error: ${res.status}`;
+    console.error(`RushPay ${res.status} on ${path}:`, JSON.stringify(body));
     throw new Error(message);
   }
   return body;
