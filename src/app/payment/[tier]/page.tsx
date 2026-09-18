@@ -1,28 +1,37 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Tier, TIER_META } from "@/lib/types";
 
 interface PaymentData {
-  paymentReference: string;
-  widgetSessionToken: string;
+  paymentCode: string;
   amount: number;
   tier: string;
   tierLabel: string;
+  widgetSessionToken: string | null;
+  paymentReference: string | null;
 }
 
-type Provider = "mtn" | "vod" | "atl";
-
-const PROVIDERS: { value: Provider; label: string }[] = [
-  { value: "mtn", label: "MTN Mobile Money" },
-  { value: "vod", label: "Telecel Cash" },
-  { value: "atl", label: "AirtelTigo Money" },
-];
+declare global {
+  interface Window {
+    RushPayV2?: {
+      init: (config: {
+        containerId: string;
+        widgetSessionToken: string;
+        paymentReference: string;
+        callbackUrl: string;
+        apiBase: string;
+      }) => void;
+    };
+  }
+}
 
 export default function PaymentPage() {
   const { tier } = useParams<{ tier: string }>();
+  const widgetInitRef = useRef(false);
+  const scriptElRef = useRef<HTMLScriptElement | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [paymentData, setPaymentData] = useState<PaymentData | null>(null);
@@ -30,19 +39,10 @@ export default function PaymentPage() {
   const [error, setError] = useState<string | null>(null);
   const [paid, setPaid] = useState(false);
 
-  const [phone, setPhone] = useState("");
-  const [provider, setProvider] = useState<Provider>("mtn");
-  const [resolvedName, setResolvedName] = useState("");
-  const [resolving, setResolving] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [chargeRef, setChargeRef] = useState<string | null>(null);
-  const [statusMsg, setStatusMsg] = useState("");
-
   const tierKey = tier as Tier;
   const meta = TIER_META[tierKey];
   const displayAmount = amount ?? meta?.amount;
 
-  // Fetch live price
   useEffect(() => {
     let cancelled = false;
     fetch("/api/tier-prices")
@@ -56,9 +56,15 @@ export default function PaymentPage() {
     return () => { cancelled = true; };
   }, [tierKey]);
 
-  // Initiate payment session
   useEffect(() => {
-    if (!meta || paid) return;
+    if (!meta || paid || scriptElRef.current) return;
+
+    const script = document.createElement("script");
+    script.src = "https://core.rushpay.cash/widget/payment-widget-v2.js";
+    script.async = true;
+    document.body.appendChild(script);
+    scriptElRef.current = script;
+
     fetch("/api/payment/initiate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -68,7 +74,7 @@ export default function PaymentPage() {
       .then((data) => {
         if (data.error) throw new Error(data.error);
         if (!data.paymentReference || !data.widgetSessionToken) {
-          throw new Error("Payment gateway failed to initialize. Please try again later.");
+          throw new Error("Payment gateway failed to initialize. Please try again.");
         }
         setPaymentData(data);
       })
@@ -77,131 +83,54 @@ export default function PaymentPage() {
       });
   }, [meta, tierKey, paid]);
 
-  // Resolve phone name
-  const resolveName = useCallback(async () => {
-    if (!paymentData) return;
-    const clean = phone.replace(/[\s-]/g, "");
-    if (!/^0\d{9}$/.test(clean)) {
-      setResolvedName("");
-      return;
-    }
-    setResolving(true);
-    try {
-      const res = await fetch("/api/rushpay-proxy/api/v1/merchant/payments/resolve-mobile-name", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-RushPay-Widget-Session": paymentData.widgetSessionToken,
-        },
-        body: JSON.stringify({ phone: clean, provider }),
-      });
-      const data = await res.json();
-      setResolvedName(data?.data?.resolved ? String(data.data.account_name || "") : "");
-    } catch {
-      setResolvedName("");
-    } finally {
-      setResolving(false);
-    }
-  }, [phone, provider, paymentData]);
-
   useEffect(() => {
-    const timer = setTimeout(resolveName, 500);
-    return () => clearTimeout(timer);
-  }, [resolveName]);
+    if (widgetInitRef.current || paid) return;
+    if (!paymentData?.widgetSessionToken || !paymentData?.paymentReference) return;
 
-  // Submit payment
-  async function handlePay() {
-    if (!paymentData || !resolvedName) return;
-    const clean = phone.replace(/[\s-]/g, "");
-    setSubmitting(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/rushpay-proxy/api/v1/merchant/payments/initiate-mobile-money", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-RushPay-Widget-Session": paymentData.widgetSessionToken,
-        },
-        body: JSON.stringify({
-          payment_reference: paymentData.paymentReference,
-          name: resolvedName,
-          phone: clean,
-          provider,
-        }),
-      });
-      const data = await res.json();
-      if (!data.success || !data.data) {
-        throw new Error(data.message || "Could not start mobile money payment");
-      }
-      if (data.data.authorization_url) {
-        window.location.href = data.data.authorization_url;
+    const ref = paymentData.paymentReference;
+    const token = paymentData.widgetSessionToken;
+
+    function tryInit() {
+      if (widgetInitRef.current) return;
+      if (!window.RushPayV2) {
+        pollRef.current = setTimeout(tryInit, 200);
         return;
       }
-      setChargeRef(data.data.reference);
-      setStatusMsg("Payment prompt sent. Approve it on your phone.");
-      startPolling(data.data.reference);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to start payment.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  // Poll charge status
-  const startPolling = useCallback((ref: string) => {
-    let attempts = 0;
-    function tick() {
-      attempts++;
-      fetch("/api/rushpay-proxy/api/v1/merchant/payments/charge-status", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-RushPay-Widget-Session": paymentData?.widgetSessionToken || "",
-        },
-        body: JSON.stringify({ reference: ref }),
-      })
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.status === "completed") {
-            setPaid(true);
-            setStatusMsg("Payment confirmed!");
-            return;
-          }
-          if (data.status === "failed") {
-            setError(data.message || "Payment failed. Please try again.");
-            setStatusMsg("");
-            return;
-          }
-          setStatusMsg(
-            attempts < 3
-              ? "Payment prompt sent. Approve it on your phone."
-              : "Waiting for your network to confirm. You can safely close this page."
-          );
-          const delay = attempts <= 12 ? 2500 : attempts <= 30 ? 5000 : 10000;
-          pollRef.current = setTimeout(tick, delay);
-        })
-        .catch(() => {
-          pollRef.current = setTimeout(tick, 5000);
+      widgetInitRef.current = true;
+      try {
+        window.RushPayV2.init({
+          containerId: "rushpay-widget",
+          paymentReference: ref,
+          widgetSessionToken: token,
+          callbackUrl: `${window.location.origin}/payment/${tierKey}?paid=1`,
+          apiBase: `${window.location.origin}/api/rushpay-proxy`,
         });
+      } catch (err) {
+        console.error("RushPayV2.init error:", err);
+        setError("Failed to load payment form. Please refresh the page.");
+      }
     }
-    tick();
-  }, [paymentData]);
 
-  useEffect(() => {
-    return () => { if (pollRef.current) clearTimeout(pollRef.current); };
-  }, []);
+    tryInit();
 
-  // Detect callback
+    return () => {
+      if (pollRef.current) clearTimeout(pollRef.current);
+    };
+  }, [paymentData, tierKey, paid]);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("paid") === "1") setPaid(true);
+    if (params.get("paid") === "1") {
+      setPaid(true);
+    }
   }, []);
 
-  // Redirect after payment
   useEffect(() => {
     if (!paid) return;
-    const t = setTimeout(() => { window.location.href = `/vip/${tierKey}`; }, 2000);
-    return () => clearTimeout(t);
+    const timeout = setTimeout(() => {
+      window.location.href = `/vip/${tierKey}`;
+    }, 2000);
+    return () => clearTimeout(timeout);
   }, [paid, tierKey]);
 
   if (!meta) {
@@ -274,97 +203,7 @@ export default function PaymentPage() {
               <p className="text-xs text-slate-500">Preparing checkout...</p>
             </div>
           )}
-
-          {paymentData && !paid && !chargeRef && (
-            <div>
-              <h2 className="text-sm font-bold text-gray-900 mb-4">
-                <i className="fas fa-mobile-alt text-teal-500 mr-2" />
-                Pay with Mobile Money
-              </h2>
-
-              <div className="mb-4">
-                <label className="block text-xs font-bold text-gray-700 mb-1.5">Network</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {PROVIDERS.map((p) => (
-                    <button
-                      key={p.value}
-                      onClick={() => setProvider(p.value)}
-                      className={`px-3 py-2.5 rounded-xl text-xs font-bold transition border ${
-                        provider === p.value
-                          ? "bg-teal-50 border-teal-300 text-teal-700"
-                          : "bg-white border-gray-200 text-gray-600 hover:border-gray-300"
-                      }`}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="mb-3">
-                <label className="block text-xs font-bold text-gray-700 mb-1.5">Mobile Money Number</label>
-                <input
-                  type="tel"
-                  inputMode="numeric"
-                  maxLength={10}
-                  placeholder="0XXXXXXXXX"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value.replace(/\D/g, ""))}
-                  className="w-full px-3.5 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-100 transition"
-                />
-              </div>
-
-              {resolving && (
-                <div className="text-xs text-gray-400 mb-3 flex items-center gap-1.5">
-                  <i className="fas fa-spinner fa-spin" /> Verifying account name...
-                </div>
-              )}
-
-              {resolvedName && (
-                <div className="mb-4 px-3.5 py-2.5 rounded-xl bg-teal-50 border border-teal-100 text-xs text-teal-700">
-                  <i className="fas fa-user-check mr-1.5" />
-                  <span className="font-bold">{resolvedName}</span>
-                </div>
-              )}
-
-              {!resolvedName && !resolving && /^0\d{9}$/.test(phone.replace(/[\s-]/g, "")) && (
-                <div className="mb-4 px-3.5 py-2.5 rounded-xl bg-amber-50 border border-amber-100 text-xs text-amber-700">
-                  <i className="fas fa-exclamation-triangle mr-1.5" />
-                  Could not verify this number. Check the number and network.
-                </div>
-              )}
-
-              <button
-                onClick={handlePay}
-                disabled={!resolvedName || submitting || !paymentData}
-                className="w-full py-3.5 rounded-xl text-sm font-bold text-white bg-gradient-to-r from-teal-500 to-teal-600 hover:from-teal-600 hover:to-teal-700 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-lg shadow-teal-500/20"
-              >
-                {submitting ? (
-                  <><i className="fas fa-spinner fa-spin mr-2" /> Processing...</>
-                ) : (
-                  <>Pay GH₵{displayAmount}</>
-                )}
-              </button>
-
-              <p className="text-center text-[10px] text-gray-400 mt-3">
-                You will receive a payment prompt on your phone
-              </p>
-            </div>
-          )}
-
-          {chargeRef && !paid && (
-            <div className="text-center py-8">
-              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-teal-50 flex items-center justify-center">
-                <i className="fas fa-mobile-alt text-2xl text-teal-500" />
-              </div>
-              <h3 className="text-base font-bold text-gray-900 mb-2">Check your phone</h3>
-              <p className="text-sm text-gray-500 mb-4">{statusMsg}</p>
-              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gray-50 border border-gray-200">
-                <i className="fas fa-spinner fa-spin text-teal-500" />
-                <span className="text-xs font-medium text-gray-600">Waiting for confirmation...</span>
-              </div>
-            </div>
-          )}
+          <div id="rushpay-widget" className="min-h-[60px]" />
         </div>
       </main>
     </div>
