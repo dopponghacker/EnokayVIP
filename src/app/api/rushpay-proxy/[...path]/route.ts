@@ -6,12 +6,20 @@ async function proxyRequest(request: NextRequest, path: string[]) {
   const rushpayUrl = `${RUSHPAY_API}/${path.join("/")}`;
 
   const headers = new Headers();
-  headers.set("X-RushPay-Widget-Session", request.headers.get("x-rushpay-widget-session") || "");
-  headers.set("Accept", request.headers.get("accept") || "application/json");
+
+  const widgetSession = request.headers.get("x-rushpay-widget-session");
+  if (widgetSession) {
+    headers.set("X-RushPay-Widget-Session", widgetSession);
+  }
 
   const contentType = request.headers.get("content-type");
   if (contentType) {
     headers.set("Content-Type", contentType);
+  }
+
+  const accept = request.headers.get("accept");
+  if (accept) {
+    headers.set("Accept", accept);
   }
 
   const init: RequestInit = {
@@ -28,14 +36,15 @@ async function proxyRequest(request: NextRequest, path: string[]) {
     const response = await fetch(rushpayUrl, init);
     const data = await response.text();
 
+    const resHeaders = new Headers();
+    resHeaders.set("Content-Type", response.headers.get("content-type") || "application/json");
+    resHeaders.set("Access-Control-Allow-Origin", "*");
+    resHeaders.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    resHeaders.set("Access-Control-Allow-Headers", "*");
+
     return new NextResponse(data, {
       status: response.status,
-      headers: {
-        "Content-Type": response.headers.get("content-type") || "application/json",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "*",
-      },
+      headers: resHeaders,
     });
   } catch (error) {
     console.error("RushPay proxy error:", error);

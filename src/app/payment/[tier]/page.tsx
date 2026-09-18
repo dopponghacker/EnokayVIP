@@ -32,18 +32,18 @@ export default function PaymentPage() {
   const { tier } = useParams<{ tier: string }>();
   const widgetInitRef = useRef(false);
   const scriptRef = useRef<HTMLScriptElement | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [paymentData, setPaymentData] = useState<PaymentData | null>(null);
   const [amount, setAmount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [paid, setPaid] = useState(false);
-  const [scriptLoaded, setScriptLoaded] = useState(false);
-  const [widgetReady, setWidgetReady] = useState(false);
 
   const tierKey = tier as Tier;
   const meta = TIER_META[tierKey];
   const displayAmount = amount ?? meta?.amount;
 
+  // Fetch live price
   useEffect(() => {
     let cancelled = false;
     fetch("/api/tier-prices")
@@ -57,15 +57,13 @@ export default function PaymentPage() {
     return () => { cancelled = true; };
   }, [tierKey]);
 
+  // Load RushPay widget script + initiate payment
   useEffect(() => {
     if (!meta || paid || scriptRef.current) return;
 
     const script = document.createElement("script");
     script.src = "https://core.rushpay.cash/widget/payment-widget-v2.js";
     script.async = true;
-    script.onload = () => {
-      setScriptLoaded(true);
-    };
     script.onerror = () => {
       setError("Failed to load payment widget. Please refresh or try a different browser.");
     };
@@ -85,31 +83,45 @@ export default function PaymentPage() {
       .catch((e) => {
         setError(e instanceof Error ? e.message : "Failed to initialize payment.");
       });
-
-    return () => {};
   }, [meta, tierKey, paid]);
 
+  // Initialize widget once both script + paymentData are ready
   useEffect(() => {
-    if (!paymentData?.widgetSessionToken || !paymentData?.paymentReference || widgetInitRef.current || paid) return;
-    if (!scriptLoaded || !window.RushPayV2) return;
+    if (widgetInitRef.current || paid) return;
 
-    widgetInitRef.current = true;
+    function tryInit() {
+      if (!paymentData?.widgetSessionToken || !paymentData?.paymentReference) return;
 
-    try {
-      window.RushPayV2.init({
-        containerId: "rushpay-widget",
-        paymentReference: paymentData.paymentReference,
-        widgetSessionToken: paymentData.widgetSessionToken,
-        callbackUrl: `${window.location.origin}/payment/${tierKey}?paid=1`,
-        apiBase: `${window.location.origin}/api/rushpay-proxy`,
-      });
-      setWidgetReady(true);
-    } catch (err) {
-      console.error("RushPayV2.init error:", err);
-      setError("Failed to initialize payment widget. Please refresh.");
+      if (!window.RushPayV2) {
+        timerRef.current = setTimeout(tryInit, 200);
+        return;
+      }
+
+      if (widgetInitRef.current) return;
+      widgetInitRef.current = true;
+
+      try {
+        window.RushPayV2.init({
+          containerId: "rushpay-widget",
+          paymentReference: paymentData.paymentReference,
+          widgetSessionToken: paymentData.widgetSessionToken,
+          callbackUrl: `${window.location.origin}/payment/${tierKey}?paid=1`,
+          apiBase: `${window.location.origin}/api/rushpay-proxy`,
+        });
+      } catch (err) {
+        console.error("RushPayV2.init error:", err);
+        setError("Failed to initialize payment widget. Please refresh.");
+      }
     }
-  }, [paymentData, scriptLoaded, tierKey, paid]);
 
+    tryInit();
+
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [paymentData, tierKey, paid]);
+
+  // Detect callback redirect
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("paid") === "1") {
@@ -117,6 +129,7 @@ export default function PaymentPage() {
     }
   }, []);
 
+  // Redirect after payment confirmed
   useEffect(() => {
     if (!paid) return;
     const timeout = setTimeout(() => {
