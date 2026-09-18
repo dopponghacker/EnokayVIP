@@ -45,29 +45,38 @@ export async function POST(req: NextRequest) {
     let widgetSessionToken: string | null = null;
     let rushpayPaymentRef: string | null = null;
 
-    const rushpayPayment = await createRushPayPayment(
-      amount,
-      `Enokay69 - ${meta.label}`,
-      paymentCode
-    );
-
-    rushpayRef = rushpayPayment.data.payment_reference;
-    rushpayPaymentRef = rushpayPayment.data.payment_reference;
-
-    const widgetSession = await createRushPayWidgetSession(rushpayRef);
-    widgetSessionToken = widgetSession.data.widget_session_token;
-
-    await prisma.payment.create({
-      data: {
-        paymentCode,
-        email: "",
-        tier,
+    try {
+      const rushpayPayment = await createRushPayPayment(
         amount,
-        currency: "GHS",
-        status: "pending",
-        rushpayRef: rushpayRef,
-      },
-    });
+        `Enokay69 - ${meta.label}`,
+        paymentCode
+      );
+      rushpayRef = rushpayPayment.data.payment_reference;
+      rushpayPaymentRef = rushpayPayment.data.payment_reference;
+
+      const widgetSession = await createRushPayWidgetSession(rushpayRef);
+      widgetSessionToken = widgetSession.data.widget_session_token;
+    } catch (rushpayError) {
+      console.error("RushPay API error:", rushpayError);
+      const msg = rushpayError instanceof Error ? rushpayError.message : "RushPay API unavailable";
+      return NextResponse.json({ error: `Payment gateway error: ${msg}` }, { status: 502 });
+    }
+
+    try {
+      await prisma.payment.create({
+        data: {
+          paymentCode,
+          email: "",
+          tier,
+          amount,
+          currency: "GHS",
+          status: "pending",
+          rushpayRef: rushpayRef,
+        },
+      });
+    } catch (dbError) {
+      console.error("DB create error (non-blocking):", dbError);
+    }
 
     return NextResponse.json({
       paymentCode,
@@ -79,8 +88,9 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     console.error("payment/initiate error:", error);
+    const message = error instanceof Error ? error.message : "Internal server error";
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: message },
       { status: 500 }
     );
   }
