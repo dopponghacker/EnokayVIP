@@ -30,7 +30,6 @@ declare global {
 
 const POLL_INTERVAL_MS = 4000;
 const POLL_TIMEOUT_MS = 20 * 60 * 1000;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const UNCONFIRMED_MESSAGE =
   "We could not confirm your payment automatically. If you were charged, please contact support with your MoMo receipt.";
 
@@ -47,7 +46,6 @@ export default function PaymentPage() {
   const [paymentData, setPaymentData] = useState<PaymentData | null>(null);
   const [amount, setAmount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [email, setEmail] = useState("");
   const [starting, setStarting] = useState(false);
   const [verifyCode, setVerifyCode] = useState<string | null>(null);
   const [returning, setReturning] = useState(false);
@@ -101,19 +99,13 @@ export default function PaymentPage() {
     e.preventDefault();
     if (starting || paymentData) return;
 
-    const trimmed = email.trim();
-    if (trimmed && !EMAIL_RE.test(trimmed)) {
-      setError("Please enter a valid email address.");
-      return;
-    }
-
     setError(null);
     setStarting(true);
     try {
       const res = await fetch("/api/payment/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tier: tierKey, email: trimmed }),
+        body: JSON.stringify({ tier: tierKey }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -295,22 +287,6 @@ export default function PaymentPage() {
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 sm:p-6">
           {!paymentData && !paid && !returning && (
             <form onSubmit={startCheckout} className="space-y-3">
-              <label htmlFor="email" className="block text-xs font-semibold text-slate-700">
-                Email for your tips <span className="font-normal text-slate-400">(optional)</span>
-              </label>
-              <input
-                id="email"
-                type="email"
-                inputMode="email"
-                autoComplete="email"
-                placeholder="you@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 px-3.5 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-400"
-              />
-              <p className="text-xs text-slate-500">
-                We will also email today&apos;s predictions here once your payment is confirmed.
-              </p>
               <button
                 type="submit"
                 disabled={starting}

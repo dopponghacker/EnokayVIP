@@ -11,8 +11,6 @@ const processedEvents = new Set<string>();
 async function handlePaymentCompleted(event: RushPayWebhookEvent) {
   const paymentRef = event.data.payment_reference;
   const paymentCode = event.data.metadata?.payment_code as string | undefined;
-  const customerEmail =
-    event.data.email || (event.data.metadata?.customer_email as string) || "";
 
   let payment = null;
 
@@ -33,7 +31,6 @@ async function handlePaymentCompleted(event: RushPayWebhookEvent) {
 
   const { claimed } = await fulfillPayment(payment.id, {
     rushpayRef: paymentRef,
-    customerEmail,
   });
   if (!claimed) {
     console.log(`Webhook: payment ${payment.id} already processed`);

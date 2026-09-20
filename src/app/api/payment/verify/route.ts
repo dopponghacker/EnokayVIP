@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Payment not found" }, { status: 404 });
     }
 
-    let paid = payment.status === "approved" || payment.status === "email_sent";
+    let paid = payment.status === "approved";
 
     if (!paid && payment.rushpayRef) {
       try {
