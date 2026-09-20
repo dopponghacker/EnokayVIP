@@ -33,6 +33,7 @@ async function rushpayFetch(path: string, options: RequestInit = {}) {
         headers: {
           "Content-Type": "application/json",
           "X-API-Key": apiKey,
+          "User-Agent": "Enokay69-Payment-Server/1.0",
           ...options.headers,
         },
       });
