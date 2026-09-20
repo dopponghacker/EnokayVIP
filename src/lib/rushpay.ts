@@ -43,6 +43,10 @@ async function rushpayFetch(path: string, options: RequestInit = {}) {
           body?.message || body?.error || `RushPay API error: ${res.status}`;
         console.error(`RushPay ${res.status} on ${path}:`, JSON.stringify(body));
 
+        if (res.status === 403) {
+          throw new Error("Payment gateway rejected the request (invalid API key or IP restriction). Contact support.");
+        }
+
         if (res.status >= 500 && attempt < MAX_RETRIES) {
           console.warn(`RushPay ${res.status} on ${path}, retrying (${attempt + 1}/${MAX_RETRIES})...`);
           await sleep(RETRY_DELAY_MS * (attempt + 1));
