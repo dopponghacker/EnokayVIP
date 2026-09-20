@@ -68,7 +68,7 @@ model Payment {
   amount          Float
   currency        String    @default("GHS")
   status          String    @default("pending")
-  rushpayRef      String?
+  rushpayRef      String?   @unique
   approvedAt      DateTime?
   emailSentAt     DateTime?
   createdAt       DateTime  @default(now())

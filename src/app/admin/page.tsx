@@ -50,6 +50,8 @@ const paymentStatusStyles: Record<PaymentStatus, string> = {
   approved: "bg-blue-100 text-blue-700",
   rejected: "bg-red-100 text-red-700",
   email_sent: "bg-green-100 text-green-700",
+  failed: "bg-red-100 text-red-700",
+  expired: "bg-gray-100 text-gray-600",
 };
 
 type AdminTab = "vip" | "matches" | "payments" | "settings";
@@ -851,7 +853,7 @@ export default function AdminPage() {
             {/* Filter + Clear */}
             <div className="flex items-center justify-between gap-2 mb-6 overflow-x-auto pb-1">
               <div className="flex items-center gap-2">
-                {(["all", "pending", "approved", "rejected", "email_sent"] as const).map((filter) => (
+                {(["all", "pending", "approved", "rejected", "email_sent", "failed", "expired"] as const).map((filter) => (
                   <button
                     key={filter}
                     onClick={() => setPaymentFilter(filter)}

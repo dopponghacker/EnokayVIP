@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import {
+  parseWebhookEvent,
   verifyWebhookSignature,
   type RushPayWebhookEvent,
 } from "@/lib/rushpay";
@@ -55,11 +56,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
     }
 
-    let event: RushPayWebhookEvent;
+    let parsed: unknown;
     try {
-      event = JSON.parse(rawBody);
+      parsed = JSON.parse(rawBody);
     } catch {
       return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+    }
+
+    const event = parseWebhookEvent(parsed);
+    if (!event) {
+      return NextResponse.json({ error: "Unexpected payload" }, { status: 400 });
     }
 
     switch (event.event) {

@@ -14,7 +14,10 @@ export async function fulfillPayment(
   if (!payment) return { claimed: false };
 
   const claim = await prisma.payment.updateMany({
-    where: { id: payment.id, status: { in: ["pending", "rejected"] } },
+    where: {
+      id: payment.id,
+      status: { in: ["pending", "rejected", "failed", "expired"] },
+    },
     data: {
       status: "approved",
       approvedAt: new Date(),
@@ -29,7 +32,16 @@ export async function fulfillPayment(
 
 export type PaymentOutcome = "paid" | "pending" | "failed";
 
-const FAILED_STATUSES = new Set(["failed", "expired", "cancelled", "canceled"]);
+const FAILED_STATUSES = new Set(["failed", "cancelled", "canceled"]);
+const EXPIRED_STATUSES = new Set(["expired"]);
+
+/** Records a dead payment so it stops being re-checked. Never touches a paid one. */
+async function markPaymentDead(paymentId: string, status: "failed" | "expired") {
+  await prisma.payment.updateMany({
+    where: { id: paymentId, status: "pending" },
+    data: { status },
+  });
+}
 
 /**
  * Asks RushPay for the payment's real state and approves it if it completed
@@ -39,6 +51,7 @@ const FAILED_STATUSES = new Set(["failed", "expired", "cancelled", "canceled"]);
 export async function confirmAndFulfillPayment(payment: {
   id: string;
   amount: number;
+  currency: string;
   rushpayRef: string | null;
 }): Promise<PaymentOutcome> {
   if (!payment.rushpayRef) return "pending";
@@ -47,6 +60,12 @@ export async function confirmAndFulfillPayment(payment: {
   const status = data?.status?.toLowerCase();
 
   if (status === "completed") {
+    if (data.currency && data.currency.toUpperCase() !== payment.currency.toUpperCase()) {
+      console.error(
+        `Payment ${payment.id}: RushPay currency ${data.currency} does not match ${payment.currency}`
+      );
+      return "failed";
+    }
     const paidAmount = parseFloat(data.amount ?? "");
     if (!Number.isFinite(paidAmount) || paidAmount < payment.amount - 0.01) {
       console.error(
@@ -68,6 +87,13 @@ export async function confirmAndFulfillPayment(payment: {
     return "paid";
   }
 
-  if (status && FAILED_STATUSES.has(status)) return "failed";
+  if (status && EXPIRED_STATUSES.has(status)) {
+    await markPaymentDead(payment.id, "expired");
+    return "failed";
+  }
+  if (status && FAILED_STATUSES.has(status)) {
+    await markPaymentDead(payment.id, "failed");
+    return "failed";
+  }
   return "pending";
 }

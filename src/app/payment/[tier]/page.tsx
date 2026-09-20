@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Tier, TIER_META } from "@/lib/types";
+import RushPayCheckout from "@/components/RushPayCheckout";
 
 interface PaymentData {
   paymentCode: string;
@@ -15,32 +16,12 @@ interface PaymentData {
   paymentReference: string | null;
 }
 
-declare global {
-  interface Window {
-    RushPayV2?: {
-      init: (config: {
-        containerId: string;
-        widgetSessionToken: string;
-        paymentReference: string;
-        callbackUrl: string;
-        returnUrl: string;
-        apiBase: string;
-      }) => void;
-    };
-  }
+interface VerifyResponse {
+  paid?: boolean;
+  failed?: boolean;
+  error?: string;
 }
 
-// RushPay requires the widget to talk to Core directly. Core only allows CORS
-// from the registered production domains, so on localhost (dev only) the
-// widget goes through our pass-through route instead.
-const RUSHPAY_API_BASE = "https://core.rushpay.cash";
-function getWidgetApiBase() {
-  const { hostname, origin } = window.location;
-  const isLocal = hostname === "localhost" || hostname === "127.0.0.1";
-  return isLocal ? `${origin}/api/rushpay-proxy` : RUSHPAY_API_BASE;
-}
-const WIDGET_SCRIPT_URL = `${RUSHPAY_API_BASE}/widget/payment-widget-v2.js`;
-const WIDGET_LOAD_TIMEOUT_MS = 15_000;
 const POLL_INTERVAL_MS = 4000;
 const POLL_TIMEOUT_MS = 20 * 60 * 1000;
 const UNCONFIRMED_MESSAGE =
@@ -66,25 +47,48 @@ function writeStoredCode(tier: string, code: string | null) {
   } catch {}
 }
 
+const noopSubscribe = () => () => {};
+
+/**
+ * The widget sends the customer back here with ?paid=1. That query proves
+ * nothing by itself; it only tells us to ask the server about the payment we
+ * stored before checkout started.
+ */
+function useWidgetReturn(tier: string) {
+  const returned = useSyncExternalStore(
+    noopSubscribe,
+    () => new URLSearchParams(window.location.search).get("paid") === "1",
+    () => false
+  );
+  const storedCode = useSyncExternalStore(
+    noopSubscribe,
+    () => (returned ? readStoredCode(tier) : null),
+    () => null
+  );
+  return { returned, storedCode };
+}
+
 export default function PaymentPage() {
   const { tier } = useParams<{ tier: string }>();
-  const startedRef = useRef(false);
-  const widgetInitRef = useRef(false);
-  const scriptElRef = useRef<HTMLScriptElement | null>(null);
-  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startingRef = useRef(false);
 
   const [paymentData, setPaymentData] = useState<PaymentData | null>(null);
   const [amount, setAmount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [verifyCode, setVerifyCode] = useState<string | null>(null);
-  const [returning, setReturning] = useState(false);
+  const [finished, setFinished] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [paid, setPaid] = useState(false);
 
   const tierKey = tier as Tier;
   const meta = TIER_META[tierKey];
   const displayAmount = amount ?? meta?.amount;
+
+  const { returned, storedCode } = useWidgetReturn(tierKey);
+  const activeCode = finished ? null : (verifyCode ?? storedCode);
+  const returnedWithoutPayment = returned && !storedCode && !verifyCode;
 
   useEffect(() => {
     let cancelled = false;
@@ -99,17 +103,11 @@ export default function PaymentPage() {
     return () => { cancelled = true; };
   }, [tierKey]);
 
-  useEffect(() => {
-    if (!meta || scriptElRef.current) return;
-    const script = document.createElement("script");
-    script.src = WIDGET_SCRIPT_URL;
-    script.async = true;
-    document.body.appendChild(script);
-    scriptElRef.current = script;
-  }, [meta]);
-
-  async function startCheckout() {
-    if (starting) return;
+  // The server decides the amount and creates the RushPay payment; we only
+  // receive the reference and a short-lived widget session token.
+  const startCheckout = useCallback(async () => {
+    if (startingRef.current) return;
+    startingRef.current = true;
 
     setError(null);
     setStarting(true);
@@ -131,87 +129,36 @@ export default function PaymentPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to initialize payment.");
     } finally {
+      startingRef.current = false;
       setStarting(false);
     }
-  }
+  }, [tierKey]);
 
-  // A widget session is scoped to one payment, so a new attempt needs a new
-  // payment, a new session and a fresh widget.
-  function restart() {
-    widgetInitRef.current = false;
-    const container = document.getElementById("rushpay-widget");
-    if (container) container.innerHTML = "";
-    setVerifyCode(null);
-    setReturning(false);
+  // A widget session is scoped to one payment, so a new attempt gets a fresh
+  // session (and a new payment if the old one can no longer be continued).
+  const restart = useCallback(() => {
+    setFinished(false);
+    setConfirming(false);
     setSessionExpired(false);
+    setVerifyCode(null);
     startCheckout();
-  }
+  }, [startCheckout]);
 
-  // On load: either verify a payment we are returning to from the widget, or
-  // start a new checkout. The ?paid=1 query proves nothing by itself, so it
-  // only tells us to ask the server about the stored payment code.
+  // On load, start checkout unless we are coming back to a payment we already
+  // started, in which case the poll below just verifies it.
   useEffect(() => {
-    if (!meta || startedRef.current) return;
-    startedRef.current = true;
+    if (!meta) return;
 
-    if (new URLSearchParams(window.location.search).get("paid") === "1") {
-      const code = readStoredCode(tierKey);
-      if (code) {
-        setReturning(true);
-        setVerifyCode(code);
-      } else {
-        setError(UNCONFIRMED_MESSAGE);
-      }
-      return;
-    }
+    const isReturn = new URLSearchParams(window.location.search).get("paid") === "1";
+    if (isReturn && readStoredCode(tierKey)) return;
 
-    startCheckout();
-  }, [meta, tierKey]);
+    // Deferred so the state updates inside startCheckout are not synchronous
+    // effect work. startingRef stops a double start, e.g. under StrictMode.
+    const timer = setTimeout(startCheckout, 0);
+    return () => clearTimeout(timer);
+  }, [meta, tierKey, startCheckout]);
 
-  useEffect(() => {
-    if (widgetInitRef.current || paid) return;
-    if (!paymentData?.widgetSessionToken || !paymentData?.paymentReference) return;
-
-    const ref = paymentData.paymentReference;
-    const token = paymentData.widgetSessionToken;
-    const deadline = Date.now() + WIDGET_LOAD_TIMEOUT_MS;
-    let initTimer: ReturnType<typeof setTimeout> | null = null;
-
-    function tryInit() {
-      if (widgetInitRef.current) return;
-      if (!window.RushPayV2) {
-        if (Date.now() > deadline) {
-          setError("We could not load the payment form. Check your connection and try again.");
-          return;
-        }
-        initTimer = setTimeout(tryInit, 200);
-        return;
-      }
-      widgetInitRef.current = true;
-      const returnUrl = `${window.location.origin}/payment/${tierKey}?paid=1`;
-      try {
-        window.RushPayV2.init({
-          containerId: "rushpay-widget",
-          paymentReference: ref,
-          widgetSessionToken: token,
-          callbackUrl: returnUrl,
-          returnUrl,
-          apiBase: getWidgetApiBase(),
-        });
-      } catch (err) {
-        console.error("RushPayV2.init error:", err);
-        setError("Failed to load payment form. Please try again.");
-      }
-    }
-
-    tryInit();
-
-    return () => {
-      if (initTimer) clearTimeout(initTimer);
-    };
-  }, [paymentData, tierKey, paid]);
-
-  // Widget sessions last about 15 minutes. Once ours is gone, offer a fresh
+  // Widget sessions last about an hour. Once ours is gone, offer a fresh
   // checkout, but keep checking the old payment until the customer chooses to.
   useEffect(() => {
     if (!paymentData || paid) return;
@@ -223,9 +170,10 @@ export default function PaymentPage() {
   // Ask the server whether RushPay has confirmed the payment. On success it
   // sets the access cookie, so the VIP page will authorize this browser.
   useEffect(() => {
-    if (!verifyCode || paid) return;
+    if (!activeCode || paid) return;
 
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const startedAt = Date.now();
 
     async function poll() {
@@ -234,9 +182,9 @@ export default function PaymentPage() {
         const res = await fetch("/api/payment/verify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ paymentCode: verifyCode }),
+          body: JSON.stringify({ paymentCode: activeCode }),
         });
-        const data = await res.json().catch(() => null);
+        const data: VerifyResponse | null = await res.json().catch(() => null);
         if (cancelled) return;
         if (res.ok && data?.paid) {
           writeStoredCode(tierKey, null);
@@ -245,23 +193,26 @@ export default function PaymentPage() {
         }
         if (res.ok && data?.failed) {
           writeStoredCode(tierKey, null);
-          setVerifyCode(null);
-          setReturning(false);
+          setFinished(true);
+          setConfirming(false);
           setError(FAILED_MESSAGE);
           return;
         }
         if (res.status === 410) {
+          setFinished(true);
           setError(data?.error || "Access has expired. Please purchase again.");
           return;
         }
         if (res.status === 404) {
+          setFinished(true);
           setError(UNCONFIRMED_MESSAGE);
           return;
         }
       } catch {}
       if (Date.now() - startedAt < POLL_TIMEOUT_MS) {
-        pollRef.current = setTimeout(poll, POLL_INTERVAL_MS);
+        timer = setTimeout(poll, POLL_INTERVAL_MS);
       } else {
+        setFinished(true);
         setError(UNCONFIRMED_MESSAGE);
       }
     }
@@ -270,9 +221,9 @@ export default function PaymentPage() {
 
     return () => {
       cancelled = true;
-      if (pollRef.current) clearTimeout(pollRef.current);
+      if (timer) clearTimeout(timer);
     };
-  }, [verifyCode, paid, tierKey]);
+  }, [activeCode, paid, tierKey]);
 
   useEffect(() => {
     if (!paid) return;
@@ -292,6 +243,8 @@ export default function PaymentPage() {
       </div>
     );
   }
+
+  const verifyingReturn = Boolean(storedCode) && !paymentData;
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -347,6 +300,13 @@ export default function PaymentPage() {
           </div>
         )}
 
+        {returnedWithoutPayment && !error && !paid && (
+          <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-3 text-xs text-amber-800 flex items-start gap-2">
+            <i className="fas fa-info-circle mt-0.5 shrink-0" />
+            <span>{UNCONFIRMED_MESSAGE}</span>
+          </div>
+        )}
+
         {sessionExpired && !paid && !error && (
           <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-3 text-xs text-amber-800 flex items-start gap-2">
             <i className="fas fa-clock mt-0.5 shrink-0" />
@@ -370,7 +330,7 @@ export default function PaymentPage() {
           </div>
         )}
 
-        {returning && !paid && !error && (
+        {(verifyingReturn || confirming) && !paid && !error && (
           <div className="mb-4 rounded-lg bg-teal-50 border border-teal-200 px-3.5 py-3 text-sm text-teal-800 flex items-center gap-2">
             <i className="fas fa-spinner fa-spin" />
             <span>Confirming your payment...</span>
@@ -378,13 +338,22 @@ export default function PaymentPage() {
         )}
 
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 sm:p-6">
-          {!paymentData && !paid && !returning && starting && (
+          {!paymentData && !paid && !verifyingReturn && starting && (
             <div className="flex items-center justify-center gap-2 py-6 text-sm text-slate-500">
               <i className="fas fa-spinner fa-spin" />
               <span>Preparing checkout...</span>
             </div>
           )}
-          <div id="rushpay-widget" className="min-h-[60px]" />
+          {paymentData?.paymentReference && paymentData.widgetSessionToken && !paid && (
+            <RushPayCheckout
+              key={`${paymentData.paymentReference}:${paymentData.widgetSessionToken}`}
+              paymentReference={paymentData.paymentReference}
+              widgetSessionToken={paymentData.widgetSessionToken}
+              returnUrl={`${window.location.origin}/payment/${tierKey}?paid=1`}
+              onPaymentComplete={() => setConfirming(true)}
+              onError={setError}
+            />
+          )}
         </div>
       </main>
     </div>
