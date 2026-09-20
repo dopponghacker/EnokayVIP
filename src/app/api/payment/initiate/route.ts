@@ -11,10 +11,16 @@ import {
 
 function generatePaymentCode(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  const bytes = randomBytes(6);
+  const len = chars.length;
+  const bytes = randomBytes(12);
   let code = "ENK-";
   for (let i = 0; i < 6; i++) {
-    code += chars[bytes[i] % chars.length];
+    const b = bytes[i];
+    if (b < 256 - (256 % len)) {
+      code += chars[b % len];
+    } else {
+      code += chars[bytes[i + 6] % len];
+    }
   }
   return code;
 }

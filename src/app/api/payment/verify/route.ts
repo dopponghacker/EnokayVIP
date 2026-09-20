@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
   try {
     const ip =
       req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
-    const limit = checkRateLimit(`pay-verify:${ip}`, 200, 5 * 60 * 1000);
+    const limit = checkRateLimit(`pay-verify:${ip}`, 100, 5 * 60 * 1000);
     if (!limit.allowed) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }

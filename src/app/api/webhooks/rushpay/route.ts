@@ -6,8 +6,6 @@ import {
 } from "@/lib/rushpay";
 import { fulfillPayment } from "@/lib/payment-fulfillment";
 
-const processedEvents = new Set<string>();
-
 async function handlePaymentCompleted(event: RushPayWebhookEvent) {
   const paymentRef = event.data.payment_reference;
   const paymentCode = event.data.metadata?.payment_code as string | undefined;
@@ -40,15 +38,10 @@ async function handlePaymentCompleted(event: RushPayWebhookEvent) {
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
   const signature = req.headers.get("X-RushPay-Signature");
-  const eventId = req.headers.get("X-RushPay-Event-Id");
 
   if (!verifyWebhookSignature(rawBody, signature)) {
     console.warn("Webhook: invalid signature");
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
-  }
-
-  if (eventId && processedEvents.has(eventId)) {
-    return NextResponse.json({ received: true });
   }
 
   let event: RushPayWebhookEvent;
@@ -57,8 +50,6 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
-
-  if (eventId) processedEvents.add(eventId);
 
   try {
     switch (event.event) {
