@@ -63,7 +63,7 @@ model BookingCode {
 model Payment {
   id              String    @id @default(cuid())
   paymentCode     String    @unique
-  email           String
+  email           String?
   tier            String
   amount          Float
   currency        String    @default("GHS")
