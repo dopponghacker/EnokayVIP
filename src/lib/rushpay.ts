@@ -45,12 +45,36 @@ export class RushPayError extends Error {
   }
 }
 
-/** Message that is safe to show a customer; details stay in the server log. */
-export function toPublicMessage(err: unknown): string {
-  if (err instanceof RushPayError && err.status === 429) {
-    return "The payment service is busy right now. Please try again in a moment.";
+/**
+ * What a customer may see: a generic message plus a short reference code that
+ * tells the site owner which kind of failure it was. No secrets or upstream
+ * text are included; the full details stay in the server log.
+ */
+export function toPublicError(err: unknown): { message: string; code: string } {
+  if (err instanceof RushPayError) {
+    if (err.status === 429) {
+      return {
+        message: "The payment service is busy right now. Please try again in a moment.",
+        code: "busy",
+      };
+    }
+    const code =
+      err.status === 0 ? "network"
+      : err.status === 401 ? "auth"
+      : err.status === 403 ? "blocked"
+      : err.status === 502 ? "bad_response"
+      : err.status >= 500 ? "upstream"
+      : `rejected_${err.status}`;
+    return {
+      message: "The payment service is temporarily unavailable. Please try again in a moment.",
+      code,
+    };
   }
-  return "The payment service is temporarily unavailable. Please try again in a moment.";
+  // Not a RushPay response at all: our own configuration (e.g. a missing key).
+  return {
+    message: "The payment service is temporarily unavailable. Please try again in a moment.",
+    code: "config",
+  };
 }
 
 function sleep(ms: number) {

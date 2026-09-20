@@ -119,7 +119,9 @@ export default function PaymentPage() {
         body: JSON.stringify({ tier: tierKey }),
       });
       const data = await res.json();
-      if (data.error) throw new Error(data.error);
+      if (data.error) {
+        throw new Error(data.code ? `${data.error} (ref: ${data.code})` : data.error);
+      }
       if (!data.paymentReference || !data.widgetSessionToken) {
         throw new Error("Payment gateway failed to initialize. Please try again.");
       }

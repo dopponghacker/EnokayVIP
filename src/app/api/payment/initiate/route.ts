@@ -11,7 +11,7 @@ import {
   type RushPayWidgetSessionResponse,
   createRushPayPayment,
   createRushPayWidgetSession,
-  toPublicMessage,
+  toPublicError,
 } from "@/lib/rushpay";
 
 const DEFAULT_WIDGET_SESSION_SECONDS = 900;
@@ -38,6 +38,12 @@ function generatePaymentCode(): string {
     }
   }
   return code;
+}
+
+/** Generic customer message plus a reference code for the site owner. */
+function gatewayFailure(err: unknown) {
+  const { message, code } = toPublicError(err);
+  return { error: message, code };
 }
 
 function reply(
@@ -117,7 +123,7 @@ export async function POST(req: NextRequest) {
         // pending) is replaced; an outage must not spawn extra payments.
         if (!(err instanceof RushPayError && [400, 404, 409].includes(err.status))) {
           console.error("RushPay API error:", err);
-          return reply({ error: toPublicMessage(err) }, 502, payment.paymentCode);
+          return reply(gatewayFailure(err), 502, payment.paymentCode);
         }
         console.warn(`Payment ${payment.id} can no longer be continued; starting a new one`);
         payment = null;
@@ -138,7 +144,7 @@ export async function POST(req: NextRequest) {
       } catch (err) {
         // Details stay in the server log; customers get a generic message.
         console.error("RushPay API error:", err);
-        return reply({ error: toPublicMessage(err) }, 502);
+        return reply(gatewayFailure(err), 502);
       }
 
       // Store the reference before issuing a widget session: verify and the
@@ -164,7 +170,7 @@ export async function POST(req: NextRequest) {
       } catch (err) {
         // The payment is saved, so a retry continues it instead of duplicating.
         console.error("RushPay API error:", err);
-        return reply({ error: toPublicMessage(err) }, 502, payment.paymentCode);
+        return reply(gatewayFailure(err), 502, payment.paymentCode);
       }
     }
 
