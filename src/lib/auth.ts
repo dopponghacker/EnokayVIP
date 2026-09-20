@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 export const ADMIN_SESSION_COOKIE = "enokay_admin_session";
 export const PAYMENT_TOKEN_COOKIE = "enokay_payment";
 const SESSION_TTL_SECONDS = 60 * 60 * 8;
-const PAYMENT_TTL_SECONDS = 60 * 60 * 24;
+export const PAYMENT_TTL_SECONDS = 60 * 60 * 24;
 
 type SessionPayload = {
   username: string;
@@ -112,13 +112,13 @@ export function verifySessionToken(token?: string | null): SessionPayload | null
 }
 
 /* ---------- Payment tokens ---------- */
-export function createPaymentToken(tier: string) {
+export function createPaymentToken(tier: string, expiresAt?: number) {
   const secret = getSecret();
   if (!secret) throw new Error("AUTH_SECRET is not configured");
 
   const payload: PaymentPayload = {
     tier,
-    expiresAt: Date.now() + PAYMENT_TTL_SECONDS * 1000,
+    expiresAt: expiresAt ?? Date.now() + PAYMENT_TTL_SECONDS * 1000,
   };
   const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
   return `${encoded}.${sign(encoded, secret)}`;

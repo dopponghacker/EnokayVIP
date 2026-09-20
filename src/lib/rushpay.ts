@@ -59,7 +59,8 @@ export interface RushPayWidgetSessionResponse {
 export async function createRushPayPayment(
   amount: number,
   description: string,
-  paymentCode: string
+  paymentCode: string,
+  customerEmail?: string
 ): Promise<RushPayCreatePaymentResponse> {
   const result = await rushpayFetch("/api/v1/merchant/payments/create", {
     method: "POST",
@@ -69,11 +70,32 @@ export async function createRushPayPayment(
       callback_url: `https://enokayvvip.com/api/webhooks/rushpay`,
       metadata: {
         payment_code: paymentCode,
+        ...(customerEmail ? { customer_email: customerEmail } : {}),
       },
     }),
   });
 
   return result as RushPayCreatePaymentResponse;
+}
+
+export interface RushPayPaymentStatusResponse {
+  success: boolean;
+  data: {
+    payment_reference: string;
+    status: string;
+    amount?: string;
+    paid_at?: string;
+  };
+}
+
+/** Server-side status lookup, the source of truth before granting access. */
+export async function getRushPayPaymentStatus(
+  paymentReference: string
+): Promise<RushPayPaymentStatusResponse> {
+  const result = await rushpayFetch(
+    `/api/v1/merchant/payments/status?payment_reference=${encodeURIComponent(paymentReference)}`
+  );
+  return result as RushPayPaymentStatusResponse;
 }
 
 export async function createRushPayWidgetSession(

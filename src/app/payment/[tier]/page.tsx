@@ -28,6 +28,16 @@ declare global {
   }
 }
 
+const POLL_INTERVAL_MS = 4000;
+const POLL_TIMEOUT_MS = 20 * 60 * 1000;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const UNCONFIRMED_MESSAGE =
+  "We could not confirm your payment automatically. If you were charged, please contact support with your MoMo receipt.";
+
+function storageKey(tier: string) {
+  return `enokay_pay_${tier}`;
+}
+
 export default function PaymentPage() {
   const { tier } = useParams<{ tier: string }>();
   const widgetInitRef = useRef(false);
@@ -37,6 +47,10 @@ export default function PaymentPage() {
   const [paymentData, setPaymentData] = useState<PaymentData | null>(null);
   const [amount, setAmount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [email, setEmail] = useState("");
+  const [starting, setStarting] = useState(false);
+  const [verifyCode, setVerifyCode] = useState<string | null>(null);
+  const [returning, setReturning] = useState(false);
   const [paid, setPaid] = useState(false);
 
   const tierKey = tier as Tier;
@@ -56,32 +70,67 @@ export default function PaymentPage() {
     return () => { cancelled = true; };
   }, [tierKey]);
 
+  // Load the widget script once; checkout starts when the customer continues.
   useEffect(() => {
-    if (!meta || paid || scriptElRef.current) return;
-
+    if (!meta || scriptElRef.current) return;
     const script = document.createElement("script");
     script.src = "https://core.rushpay.cash/widget/payment-widget-v2.js";
     script.async = true;
     document.body.appendChild(script);
     scriptElRef.current = script;
+  }, [meta]);
 
-    fetch("/api/payment/initiate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tier: tierKey }),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.error) throw new Error(data.error);
-        if (!data.paymentReference || !data.widgetSessionToken) {
-          throw new Error("Payment gateway failed to initialize. Please try again.");
-        }
-        setPaymentData(data);
-      })
-      .catch((e) => {
-        setError(e instanceof Error ? e.message : "Failed to initialize payment.");
+  // Back from the widget redirect: the query string proves nothing, so pick
+  // up the stored payment code and let the server verify it.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("paid") !== "1") return;
+    let code: string | null = null;
+    try {
+      code = sessionStorage.getItem(storageKey(tierKey));
+    } catch {}
+    if (code) {
+      setReturning(true);
+      setVerifyCode(code);
+    } else {
+      setError(UNCONFIRMED_MESSAGE);
+    }
+  }, [tierKey]);
+
+  async function startCheckout(e: React.FormEvent) {
+    e.preventDefault();
+    if (starting || paymentData) return;
+
+    const trimmed = email.trim();
+    if (trimmed && !EMAIL_RE.test(trimmed)) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+
+    setError(null);
+    setStarting(true);
+    try {
+      const res = await fetch("/api/payment/initiate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tier: tierKey, email: trimmed }),
       });
-  }, [meta, tierKey, paid]);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      if (!data.paymentReference || !data.widgetSessionToken) {
+        throw new Error("Payment gateway failed to initialize. Please try again.");
+      }
+      try {
+        sessionStorage.setItem(storageKey(tierKey), data.paymentCode);
+      } catch {}
+      setPaymentData(data);
+      setVerifyCode(data.paymentCode);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to initialize payment.");
+    } finally {
+      setStarting(false);
+    }
+  }
 
   useEffect(() => {
     if (widgetInitRef.current || paid) return;
@@ -89,11 +138,12 @@ export default function PaymentPage() {
 
     const ref = paymentData.paymentReference;
     const token = paymentData.widgetSessionToken;
+    let initTimer: ReturnType<typeof setTimeout> | null = null;
 
     function tryInit() {
       if (widgetInitRef.current) return;
       if (!window.RushPayV2) {
-        pollRef.current = setTimeout(tryInit, 200);
+        initTimer = setTimeout(tryInit, 200);
         return;
       }
       widgetInitRef.current = true;
@@ -114,22 +164,61 @@ export default function PaymentPage() {
     tryInit();
 
     return () => {
-      if (pollRef.current) clearTimeout(pollRef.current);
+      if (initTimer) clearTimeout(initTimer);
     };
   }, [paymentData, tierKey, paid]);
 
+  // Ask the server whether RushPay has confirmed the payment. On success it
+  // sets the access cookie, so the VIP page will authorize this browser.
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("paid") === "1") {
-      setPaid(true);
+    if (!verifyCode || paid) return;
+
+    let cancelled = false;
+    const startedAt = Date.now();
+
+    async function poll() {
+      if (cancelled) return;
+      try {
+        const res = await fetch("/api/payment/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ paymentCode: verifyCode }),
+        });
+        const data = await res.json().catch(() => null);
+        if (cancelled) return;
+        if (res.ok && data?.paid) {
+          setPaid(true);
+          return;
+        }
+        if (res.status === 410) {
+          setError(data?.error || "Access has expired. Please purchase again.");
+          return;
+        }
+        if (res.status === 404) {
+          setError(UNCONFIRMED_MESSAGE);
+          return;
+        }
+      } catch {}
+      if (Date.now() - startedAt < POLL_TIMEOUT_MS) {
+        pollRef.current = setTimeout(poll, POLL_INTERVAL_MS);
+      } else {
+        setError(UNCONFIRMED_MESSAGE);
+      }
     }
-  }, []);
+
+    poll();
+
+    return () => {
+      cancelled = true;
+      if (pollRef.current) clearTimeout(pollRef.current);
+    };
+  }, [verifyCode, paid]);
 
   useEffect(() => {
     if (!paid) return;
     const timeout = setTimeout(() => {
       window.location.href = `/vip/${tierKey}`;
-    }, 2000);
+    }, 1500);
     return () => clearTimeout(timeout);
   }, [paid, tierKey]);
 
@@ -196,12 +285,40 @@ export default function PaymentPage() {
           </div>
         )}
 
+        {returning && !paid && !error && (
+          <div className="mb-4 rounded-lg bg-teal-50 border border-teal-200 px-3.5 py-3 text-sm text-teal-800 flex items-center gap-2">
+            <i className="fas fa-spinner fa-spin" />
+            <span>Confirming your payment...</span>
+          </div>
+        )}
+
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 sm:p-6">
-          {!paymentData && !error && (
-            <div className="text-center py-8">
-              <i className="fas fa-spinner fa-spin text-2xl text-teal-500 mb-3" />
-              <p className="text-xs text-slate-500">Preparing checkout...</p>
-            </div>
+          {!paymentData && !paid && !returning && (
+            <form onSubmit={startCheckout} className="space-y-3">
+              <label htmlFor="email" className="block text-xs font-semibold text-slate-700">
+                Email for your tips <span className="font-normal text-slate-400">(optional)</span>
+              </label>
+              <input
+                id="email"
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3.5 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-400"
+              />
+              <p className="text-xs text-slate-500">
+                We will also email today&apos;s predictions here once your payment is confirmed.
+              </p>
+              <button
+                type="submit"
+                disabled={starting}
+                className="w-full rounded-lg bg-teal-500 hover:bg-teal-600 disabled:opacity-60 text-white font-bold text-sm py-3 transition"
+              >
+                {starting ? "Preparing checkout..." : `Continue to pay GH₵${displayAmount}`}
+              </button>
+            </form>
           )}
           <div id="rushpay-widget" className="min-h-[60px]" />
         </div>

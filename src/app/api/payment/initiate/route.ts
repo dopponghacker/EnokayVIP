@@ -9,6 +9,8 @@ import {
   createRushPayWidgetSession,
 } from "@/lib/rushpay";
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 function generatePaymentCode(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   const bytes = randomBytes(6);
@@ -31,10 +33,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { tier } = await req.json();
+    const { tier, email: rawEmail } = await req.json();
 
     if (!tier || !(tier in TIER_META)) {
       return NextResponse.json({ error: "Invalid tier" }, { status: 400 });
+    }
+
+    const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
+    if (email && (email.length > 254 || !EMAIL_RE.test(email))) {
+      return NextResponse.json({ error: "Please enter a valid email address." }, { status: 400 });
     }
 
     const meta = TIER_META[tier as Tier];
@@ -49,7 +56,8 @@ export async function POST(req: NextRequest) {
       const rushpayPayment = await createRushPayPayment(
         amount,
         `Enokay69 - ${meta.label}`,
-        paymentCode
+        paymentCode,
+        email
       );
       rushpayRef = rushpayPayment.data.payment_reference;
       rushpayPaymentRef = rushpayPayment.data.payment_reference;
@@ -62,11 +70,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Payment gateway: ${msg}` }, { status: 502 });
     }
 
+    // Must succeed: verify and the webhook both look the payment up here.
     try {
       await prisma.payment.create({
         data: {
           paymentCode,
-          email: "",
+          email,
           tier,
           amount,
           currency: "GHS",
@@ -75,7 +84,11 @@ export async function POST(req: NextRequest) {
         },
       });
     } catch (dbError) {
-      console.error("DB create error (non-blocking):", dbError);
+      console.error("DB create error:", dbError);
+      return NextResponse.json(
+        { error: "Could not record your payment. Please try again." },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json({
