@@ -59,7 +59,10 @@ export async function POST(req: NextRequest) {
     } catch (rushpayError) {
       console.error("RushPay API error:", rushpayError);
       const msg = rushpayError instanceof Error ? rushpayError.message : "RushPay API unavailable";
-      return NextResponse.json({ error: `Payment gateway: ${msg}` }, { status: 502 });
+      return NextResponse.json(
+        { error: `Payment gateway error: ${msg}. Please try again in a moment.` },
+        { status: 502 }
+      );
     }
 
     // Must succeed: verify and the webhook both look the payment up here.

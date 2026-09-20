@@ -96,10 +96,11 @@ export default function PaymentPage() {
   }, [tierKey]);
 
   async function startCheckout() {
-    if (starting || paymentData) return;
+    if (starting) return;
 
     setError(null);
     setStarting(true);
+    setPaymentData(null);
     try {
       const res = await fetch("/api/payment/initiate", {
         method: "POST",
@@ -271,7 +272,16 @@ export default function PaymentPage() {
         {error && (
           <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-3.5 py-3 text-xs text-red-700 flex items-start gap-2">
             <i className="fas fa-exclamation-circle mt-0.5 shrink-0" />
-            <span>{error}</span>
+            <div className="flex-1">
+              <span>{error}</span>
+              <button
+                onClick={startCheckout}
+                disabled={starting}
+                className="mt-2 block text-xs font-semibold text-teal-600 hover:underline disabled:opacity-50"
+              >
+                {starting ? "Retrying..." : "Try again"}
+              </button>
+            </div>
           </div>
         )}
 

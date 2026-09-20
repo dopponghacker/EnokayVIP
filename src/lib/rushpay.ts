@@ -14,26 +14,54 @@ function getWebhookSecret(): string {
   return secret;
 }
 
+const MAX_RETRIES = 2;
+const RETRY_DELAY_MS = 1500;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function rushpayFetch(path: string, options: RequestInit = {}) {
   const url = `${RUSHPAY_API_BASE}${path}`;
   const apiKey = getApiKey();
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-Key": apiKey,
-      ...options.headers,
-    },
-  });
 
-  const body = await res.json().catch(() => null);
-  if (!res.ok) {
-    const message =
-      body?.message || body?.error || `RushPay API error: ${res.status}`;
-    console.error(`RushPay ${res.status} on ${path}:`, JSON.stringify(body));
-    throw new Error(message);
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const res = await fetch(url, {
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": apiKey,
+          ...options.headers,
+        },
+      });
+
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        const message =
+          body?.message || body?.error || `RushPay API error: ${res.status}`;
+        console.error(`RushPay ${res.status} on ${path}:`, JSON.stringify(body));
+
+        if (res.status >= 500 && attempt < MAX_RETRIES) {
+          console.warn(`RushPay ${res.status} on ${path}, retrying (${attempt + 1}/${MAX_RETRIES})...`);
+          await sleep(RETRY_DELAY_MS * (attempt + 1));
+          continue;
+        }
+        throw new Error(message);
+      }
+      return body;
+    } catch (err) {
+      lastError = err;
+      if (attempt < MAX_RETRIES) {
+        console.warn(`RushPay fetch failed on ${path}, retrying (${attempt + 1}/${MAX_RETRIES})...`);
+        await sleep(RETRY_DELAY_MS * (attempt + 1));
+        continue;
+      }
+      throw lastError;
+    }
   }
-  return body;
+  throw lastError;
 }
 
 export interface RushPayCreatePaymentResponse {
