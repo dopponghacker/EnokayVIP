@@ -30,8 +30,15 @@ declare global {
   }
 }
 
-// RushPay requires the widget to talk to Core directly.
+// RushPay requires the widget to talk to Core directly. Core only allows CORS
+// from the registered production domains, so on localhost (dev only) the
+// widget goes through our pass-through route instead.
 const RUSHPAY_API_BASE = "https://core.rushpay.cash";
+function getWidgetApiBase() {
+  const { hostname, origin } = window.location;
+  const isLocal = hostname === "localhost" || hostname === "127.0.0.1";
+  return isLocal ? `${origin}/api/rushpay-proxy` : RUSHPAY_API_BASE;
+}
 const WIDGET_SCRIPT_URL = `${RUSHPAY_API_BASE}/widget/payment-widget-v2.js`;
 const WIDGET_LOAD_TIMEOUT_MS = 15_000;
 const POLL_INTERVAL_MS = 4000;
@@ -189,7 +196,7 @@ export default function PaymentPage() {
           widgetSessionToken: token,
           callbackUrl: returnUrl,
           returnUrl,
-          apiBase: RUSHPAY_API_BASE,
+          apiBase: getWidgetApiBase(),
         });
       } catch (err) {
         console.error("RushPayV2.init error:", err);
