@@ -7,7 +7,10 @@ import { getTierAmount } from "@/lib/pricing";
 import {
   createRushPayPayment,
   createRushPayWidgetSession,
+  toPublicMessage,
 } from "@/lib/rushpay";
+
+const DEFAULT_WIDGET_SESSION_SECONDS = 900;
 
 function generatePaymentCode(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -49,6 +52,7 @@ export async function POST(req: NextRequest) {
 
     let rushpayRef: string | null = null;
     let widgetSessionToken: string | null = null;
+    let sessionExpiresIn = DEFAULT_WIDGET_SESSION_SECONDS;
     let rushpayPaymentRef: string | null = null;
 
     try {
@@ -62,11 +66,12 @@ export async function POST(req: NextRequest) {
 
       const widgetSession = await createRushPayWidgetSession(rushpayRef);
       widgetSessionToken = widgetSession.data.widget_session_token;
+      sessionExpiresIn = widgetSession.data.expires_in ?? sessionExpiresIn;
     } catch (rushpayError) {
+      // Details stay in the server log; customers get a generic message.
       console.error("RushPay API error:", rushpayError);
-      const msg = rushpayError instanceof Error ? rushpayError.message : "RushPay API unavailable";
       return NextResponse.json(
-        { error: `Payment gateway error: ${msg}. Please try again in a moment.` },
+        { error: toPublicMessage(rushpayError) },
         { status: 502 }
       );
     }
@@ -97,13 +102,13 @@ export async function POST(req: NextRequest) {
       tier,
       tierLabel: meta.label,
       widgetSessionToken,
+      sessionExpiresIn,
       paymentReference: rushpayPaymentRef,
     });
   } catch (error) {
     console.error("payment/initiate error:", error);
-    const message = error instanceof Error ? error.message : "Internal server error";
     return NextResponse.json(
-      { error: message },
+      { error: "Something went wrong. Please try again." },
       { status: 500 }
     );
   }

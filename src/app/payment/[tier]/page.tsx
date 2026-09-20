@@ -11,6 +11,7 @@ interface PaymentData {
   tier: string;
   tierLabel: string;
   widgetSessionToken: string | null;
+  sessionExpiresIn: number;
   paymentReference: string | null;
 }
 
@@ -22,23 +23,45 @@ declare global {
         widgetSessionToken: string;
         paymentReference: string;
         callbackUrl: string;
+        returnUrl: string;
         apiBase: string;
       }) => void;
     };
   }
 }
 
+// RushPay requires the widget to talk to Core directly.
+const RUSHPAY_API_BASE = "https://core.rushpay.cash";
+const WIDGET_SCRIPT_URL = `${RUSHPAY_API_BASE}/widget/payment-widget-v2.js`;
+const WIDGET_LOAD_TIMEOUT_MS = 15_000;
 const POLL_INTERVAL_MS = 4000;
 const POLL_TIMEOUT_MS = 20 * 60 * 1000;
 const UNCONFIRMED_MESSAGE =
   "We could not confirm your payment automatically. If you were charged, please contact support with your MoMo receipt.";
+const FAILED_MESSAGE = "Your payment was not completed. Please try again.";
 
 function storageKey(tier: string) {
   return `enokay_pay_${tier}`;
 }
 
+function readStoredCode(tier: string): string | null {
+  try {
+    return localStorage.getItem(storageKey(tier));
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredCode(tier: string, code: string | null) {
+  try {
+    if (code) localStorage.setItem(storageKey(tier), code);
+    else localStorage.removeItem(storageKey(tier));
+  } catch {}
+}
+
 export default function PaymentPage() {
   const { tier } = useParams<{ tier: string }>();
+  const startedRef = useRef(false);
   const widgetInitRef = useRef(false);
   const scriptElRef = useRef<HTMLScriptElement | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -49,6 +72,7 @@ export default function PaymentPage() {
   const [starting, setStarting] = useState(false);
   const [verifyCode, setVerifyCode] = useState<string | null>(null);
   const [returning, setReturning] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [paid, setPaid] = useState(false);
 
   const tierKey = tier as Tier;
@@ -68,32 +92,14 @@ export default function PaymentPage() {
     return () => { cancelled = true; };
   }, [tierKey]);
 
-  // Load the widget script once; checkout starts when the customer continues.
   useEffect(() => {
     if (!meta || scriptElRef.current) return;
     const script = document.createElement("script");
-    script.src = "https://core.rushpay.cash/widget/payment-widget-v2.js";
+    script.src = WIDGET_SCRIPT_URL;
     script.async = true;
     document.body.appendChild(script);
     scriptElRef.current = script;
   }, [meta]);
-
-  // Back from the widget redirect: the query string proves nothing, so pick
-  // up the stored payment code and let the server verify it.
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("paid") !== "1") return;
-    let code: string | null = null;
-    try {
-      code = sessionStorage.getItem(storageKey(tierKey));
-    } catch {}
-    if (code) {
-      setReturning(true);
-      setVerifyCode(code);
-    } else {
-      setError(UNCONFIRMED_MESSAGE);
-    }
-  }, [tierKey]);
 
   async function startCheckout() {
     if (starting) return;
@@ -112,9 +118,7 @@ export default function PaymentPage() {
       if (!data.paymentReference || !data.widgetSessionToken) {
         throw new Error("Payment gateway failed to initialize. Please try again.");
       }
-      try {
-        sessionStorage.setItem(storageKey(tierKey), data.paymentCode);
-      } catch {}
+      writeStoredCode(tierKey, data.paymentCode);
       setPaymentData(data);
       setVerifyCode(data.paymentCode);
     } catch (err) {
@@ -124,11 +128,38 @@ export default function PaymentPage() {
     }
   }
 
+  // A widget session is scoped to one payment, so a new attempt needs a new
+  // payment, a new session and a fresh widget.
+  function restart() {
+    widgetInitRef.current = false;
+    const container = document.getElementById("rushpay-widget");
+    if (container) container.innerHTML = "";
+    setVerifyCode(null);
+    setReturning(false);
+    setSessionExpired(false);
+    startCheckout();
+  }
+
+  // On load: either verify a payment we are returning to from the widget, or
+  // start a new checkout. The ?paid=1 query proves nothing by itself, so it
+  // only tells us to ask the server about the stored payment code.
   useEffect(() => {
-    if (meta && !paymentData && !paid && !returning) {
-      startCheckout();
+    if (!meta || startedRef.current) return;
+    startedRef.current = true;
+
+    if (new URLSearchParams(window.location.search).get("paid") === "1") {
+      const code = readStoredCode(tierKey);
+      if (code) {
+        setReturning(true);
+        setVerifyCode(code);
+      } else {
+        setError(UNCONFIRMED_MESSAGE);
+      }
+      return;
     }
-  }, [meta]);
+
+    startCheckout();
+  }, [meta, tierKey]);
 
   useEffect(() => {
     if (widgetInitRef.current || paid) return;
@@ -136,26 +167,33 @@ export default function PaymentPage() {
 
     const ref = paymentData.paymentReference;
     const token = paymentData.widgetSessionToken;
+    const deadline = Date.now() + WIDGET_LOAD_TIMEOUT_MS;
     let initTimer: ReturnType<typeof setTimeout> | null = null;
 
     function tryInit() {
       if (widgetInitRef.current) return;
       if (!window.RushPayV2) {
+        if (Date.now() > deadline) {
+          setError("We could not load the payment form. Check your connection and try again.");
+          return;
+        }
         initTimer = setTimeout(tryInit, 200);
         return;
       }
       widgetInitRef.current = true;
+      const returnUrl = `${window.location.origin}/payment/${tierKey}?paid=1`;
       try {
         window.RushPayV2.init({
           containerId: "rushpay-widget",
           paymentReference: ref,
           widgetSessionToken: token,
-          callbackUrl: `${window.location.origin}/payment/${tierKey}?paid=1`,
-          apiBase: `${window.location.origin}/api/rushpay-proxy`,
+          callbackUrl: returnUrl,
+          returnUrl,
+          apiBase: RUSHPAY_API_BASE,
         });
       } catch (err) {
         console.error("RushPayV2.init error:", err);
-        setError("Failed to load payment form. Please refresh the page.");
+        setError("Failed to load payment form. Please try again.");
       }
     }
 
@@ -165,6 +203,15 @@ export default function PaymentPage() {
       if (initTimer) clearTimeout(initTimer);
     };
   }, [paymentData, tierKey, paid]);
+
+  // Widget sessions last about 15 minutes. Once ours is gone, offer a fresh
+  // checkout, but keep checking the old payment until the customer chooses to.
+  useEffect(() => {
+    if (!paymentData || paid) return;
+    const ms = Math.max(0, (paymentData.sessionExpiresIn - 15) * 1000);
+    const timer = setTimeout(() => setSessionExpired(true), ms);
+    return () => clearTimeout(timer);
+  }, [paymentData, paid]);
 
   // Ask the server whether RushPay has confirmed the payment. On success it
   // sets the access cookie, so the VIP page will authorize this browser.
@@ -185,7 +232,15 @@ export default function PaymentPage() {
         const data = await res.json().catch(() => null);
         if (cancelled) return;
         if (res.ok && data?.paid) {
+          writeStoredCode(tierKey, null);
           setPaid(true);
+          return;
+        }
+        if (res.ok && data?.failed) {
+          writeStoredCode(tierKey, null);
+          setVerifyCode(null);
+          setReturning(false);
+          setError(FAILED_MESSAGE);
           return;
         }
         if (res.status === 410) {
@@ -210,7 +265,7 @@ export default function PaymentPage() {
       cancelled = true;
       if (pollRef.current) clearTimeout(pollRef.current);
     };
-  }, [verifyCode, paid]);
+  }, [verifyCode, paid, tierKey]);
 
   useEffect(() => {
     if (!paid) return;
@@ -275,11 +330,27 @@ export default function PaymentPage() {
             <div className="flex-1">
               <span>{error}</span>
               <button
-                onClick={startCheckout}
+                onClick={restart}
                 disabled={starting}
                 className="mt-2 block text-xs font-semibold text-teal-600 hover:underline disabled:opacity-50"
               >
                 {starting ? "Retrying..." : "Try again"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {sessionExpired && !paid && !error && (
+          <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-3 text-xs text-amber-800 flex items-start gap-2">
+            <i className="fas fa-clock mt-0.5 shrink-0" />
+            <div className="flex-1">
+              <span>This checkout session has expired. If you have not paid yet, start a new one.</span>
+              <button
+                onClick={restart}
+                disabled={starting}
+                className="mt-2 block text-xs font-semibold text-teal-600 hover:underline disabled:opacity-50"
+              >
+                Start new checkout
               </button>
             </div>
           </div>

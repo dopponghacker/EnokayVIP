@@ -7,8 +7,10 @@ import {
   createPaymentToken,
   paymentCookieOptions,
 } from "@/lib/auth";
-import { getRushPayPaymentStatus } from "@/lib/rushpay";
-import { fulfillPayment } from "@/lib/payment-fulfillment";
+import {
+  confirmAndFulfillPayment,
+  type PaymentOutcome,
+} from "@/lib/payment-fulfillment";
 
 const PAYMENT_CODE_RE = /^ENK-[A-Z0-9]{6}$/;
 
@@ -37,28 +39,22 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Payment not found" }, { status: 404 });
     }
 
-    let paid = payment.status === "approved";
+    let outcome: PaymentOutcome =
+      payment.status === "approved" ? "paid" : "pending";
 
-    if (!paid && payment.rushpayRef) {
+    if (outcome !== "paid") {
       try {
-        const result = await getRushPayPaymentStatus(payment.rushpayRef);
-        const paidAmount = parseFloat(result.data?.amount ?? "");
-        const completed =
-          result.data?.status === "completed" &&
-          Number.isFinite(paidAmount) &&
-          paidAmount >= payment.amount - 0.01;
-
-        if (completed) {
-          await fulfillPayment(payment.id, { rushpayRef: payment.rushpayRef });
-          paid = true;
-        }
+        outcome = await confirmAndFulfillPayment(payment);
       } catch (err) {
         // RushPay hiccup: report "not paid yet" so the client keeps polling.
         console.error("payment/verify: status lookup failed:", err);
       }
     }
 
-    if (!paid) {
+    if (outcome === "failed") {
+      return NextResponse.json({ paid: false, failed: true });
+    }
+    if (outcome !== "paid") {
       return NextResponse.json({ paid: false });
     }
 
