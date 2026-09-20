@@ -95,8 +95,7 @@ export default function PaymentPage() {
     }
   }, [tierKey]);
 
-  async function startCheckout(e: React.FormEvent) {
-    e.preventDefault();
+  async function startCheckout() {
     if (starting || paymentData) return;
 
     setError(null);
@@ -123,6 +122,12 @@ export default function PaymentPage() {
       setStarting(false);
     }
   }
+
+  useEffect(() => {
+    if (meta && !paymentData && !paid && !returning) {
+      startCheckout();
+    }
+  }, [meta]);
 
   useEffect(() => {
     if (widgetInitRef.current || paid) return;
@@ -285,16 +290,11 @@ export default function PaymentPage() {
         )}
 
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 sm:p-6">
-          {!paymentData && !paid && !returning && (
-            <form onSubmit={startCheckout} className="space-y-3">
-              <button
-                type="submit"
-                disabled={starting}
-                className="w-full rounded-lg bg-teal-500 hover:bg-teal-600 disabled:opacity-60 text-white font-bold text-sm py-3 transition"
-              >
-                {starting ? "Preparing checkout..." : `Continue to pay GH₵${displayAmount}`}
-              </button>
-            </form>
+          {!paymentData && !paid && !returning && starting && (
+            <div className="flex items-center justify-center gap-2 py-6 text-sm text-slate-500">
+              <i className="fas fa-spinner fa-spin" />
+              <span>Preparing checkout...</span>
+            </div>
           )}
           <div id="rushpay-widget" className="min-h-[60px]" />
         </div>
