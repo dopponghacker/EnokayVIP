@@ -106,8 +106,6 @@ export default function AdminPage() {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loadingPayments, setLoadingPayments] = useState(true);
   const [paymentFilter, setPaymentFilter] = useState<"all" | PaymentStatus>("all");
-  const [approvingPayment, setApprovingPayment] = useState<string | null>(null);
-  const [rejectingPayment, setRejectingPayment] = useState<string | null>(null);
 
   const adminRequest = useCallback(async (url: string, init?: RequestInit) => {
     const response = await fetch(url, init);
@@ -234,58 +232,6 @@ export default function AdminPage() {
       setError(err instanceof Error ? err.message : "Unable to clear payments.");
     }
   }
-
-  async function handleApprovePayment(id: string) {
-    const confirmed = await alert({
-      title: "Approve payment?",
-      message: "This will grant VIP access and send predictions to the customer's email.",
-      variant: "confirm",
-      confirmText: "Approve",
-      cancelText: "Cancel",
-    });
-    if (!confirmed) return;
-    setApprovingPayment(id);
-    setError("");
-    try {
-      const res = await adminRequest(`/api/admin/payments/${id}/approve`, { method: "POST" });
-      const data = await res.json();
-      if (data.emailSent) {
-        addToast("Payment approved and email sent!", "success");
-      } else if (data.emailError) {
-        addToast(`Payment approved but email failed: ${data.emailError}`, "error");
-      } else {
-        addToast("Payment approved!", "success");
-      }
-      await fetchPayments();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to approve payment.");
-    } finally {
-      setApprovingPayment(null);
-    }
-  }
-
-  async function handleRejectPayment(id: string) {
-    const confirmed = await alert({
-      title: "Reject payment?",
-      message: "This payment will be marked as rejected.",
-      variant: "confirm",
-      confirmText: "Reject",
-      cancelText: "Cancel",
-    });
-    if (!confirmed) return;
-    setRejectingPayment(id);
-    setError("");
-    try {
-      await adminRequest(`/api/admin/payments/${id}/reject`, { method: "POST" });
-      addToast("Payment rejected", "success");
-      await fetchPayments();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to reject payment.");
-    } finally {
-      setRejectingPayment(null);
-    }
-  }
-
 
   async function handleSavePrices(e: React.FormEvent) {
     e.preventDefault();
@@ -850,23 +796,8 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* Filter + Clear */}
-            <div className="flex items-center justify-between gap-2 mb-6 overflow-x-auto pb-1">
-              <div className="flex items-center gap-2">
-                {(["all", "pending", "approved", "rejected", "email_sent", "failed", "expired"] as const).map((filter) => (
-                  <button
-                    key={filter}
-                    onClick={() => setPaymentFilter(filter)}
-                    className={`px-4 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
-                      paymentFilter === filter
-                        ? "bg-slate-900 text-white"
-                        : "bg-white text-gray-600 border border-gray-200 hover:border-gray-300"
-                    }`}
-                  >
-                    {filter === "all" ? "All" : filter === "email_sent" ? "Email Sent" : filter.charAt(0).toUpperCase() + filter.slice(1)}
-                  </button>
-                ))}
-              </div>
+            {/* Clear */}
+            <div className="flex items-center justify-end gap-2 mb-6">
               <button
                 onClick={handleClearAllPayments}
                 className="px-3 py-2 rounded-xl text-xs font-bold bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition whitespace-nowrap"
@@ -880,7 +811,7 @@ export default function AdminPage() {
               <div className="px-5 py-4 border-b border-gray-100">
                 <h3 className="text-sm font-bold text-gray-900">
                   <i className="fas fa-credit-card text-gray-400 mr-2" />
-                  Payments ({payments.filter((p) => paymentFilter === "all" || p.status === paymentFilter).length})
+                  Payments ({payments.length})
                 </h3>
               </div>
               {loadingPayments ? (
@@ -896,7 +827,6 @@ export default function AdminPage() {
               ) : (
                 <div className="divide-y divide-gray-100">
                   {payments
-                    .filter((p) => paymentFilter === "all" || p.status === paymentFilter)
                     .map((payment) => (
                     <div key={payment.id} className="p-4 hover:bg-gray-50/50 transition">
                       <div className="flex items-center justify-between gap-3">
@@ -922,26 +852,6 @@ export default function AdminPage() {
                             {payment.emailSentAt && ` • Email sent ${new Date(payment.emailSentAt).toLocaleString()}`}
                           </div>
                         </div>
-                        {payment.status === "pending" && (
-                          <div className="flex items-center gap-1 shrink-0">
-                            <button
-                              onClick={() => handleApprovePayment(payment.id)}
-                              disabled={approvingPayment === payment.id}
-                              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-teal-600 text-white hover:bg-teal-700 transition disabled:opacity-50"
-                            >
-                              <i className={`fas ${approvingPayment === payment.id ? "fa-spinner fa-spin" : "fa-check"}`} />
-                              <span className="hidden sm:inline ml-1">{approvingPayment === payment.id ? "..." : "Approve"}</span>
-                            </button>
-                            <button
-                              onClick={() => handleRejectPayment(payment.id)}
-                              disabled={rejectingPayment === payment.id}
-                              className="px-3 py-1.5 rounded-lg text-xs font-bold bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 transition disabled:opacity-50"
-                            >
-                              <i className={`fas ${rejectingPayment === payment.id ? "fa-spinner fa-spin" : "fa-times"}`} />
-                              <span className="hidden sm:inline ml-1">{rejectingPayment === payment.id ? "..." : "Reject"}</span>
-                            </button>
-                          </div>
-                        )}
                       </div>
                     </div>
                   ))}
