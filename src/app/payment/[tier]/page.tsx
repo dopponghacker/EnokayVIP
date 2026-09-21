@@ -4,16 +4,15 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Tier, TIER_META } from "@/lib/types";
-import RushPayCheckout from "@/components/RushPayCheckout";
+import PaystackCheckout from "@/components/PaystackCheckout";
 
 interface PaymentData {
   paymentCode: string;
   amount: number;
   tier: string;
   tierLabel: string;
-  widgetSessionToken: string | null;
-  sessionExpiresIn: number;
-  paymentReference: string | null;
+  paystackReference: string;
+  publicKey: string;
 }
 
 interface VerifyResponse {
@@ -49,11 +48,6 @@ function writeStoredCode(tier: string, code: string | null) {
 
 const noopSubscribe = () => () => {};
 
-/**
- * The widget sends the customer back here with ?paid=1. That query proves
- * nothing by itself; it only tells us to ask the server about the payment we
- * stored before checkout started.
- */
 function useWidgetReturn(tier: string) {
   const returned = useSyncExternalStore(
     noopSubscribe,
@@ -103,8 +97,6 @@ export default function PaymentPage() {
     return () => { cancelled = true; };
   }, [tierKey]);
 
-  // The server decides the amount and creates the RushPay payment; we only
-  // receive the reference and a short-lived widget session token.
   const startCheckout = useCallback(async () => {
     if (startingRef.current) return;
     startingRef.current = true;
@@ -122,7 +114,7 @@ export default function PaymentPage() {
       if (data.error) {
         throw new Error(data.code ? `${data.error} (ref: ${data.code})` : data.error);
       }
-      if (!data.paymentReference || !data.widgetSessionToken) {
+      if (!data.paystackReference || !data.publicKey) {
         throw new Error("Payment gateway failed to initialize. Please try again.");
       }
       writeStoredCode(tierKey, data.paymentCode);
@@ -136,41 +128,32 @@ export default function PaymentPage() {
     }
   }, [tierKey]);
 
-  // A widget session is scoped to one payment, so a new attempt gets a fresh
-  // session (and a new payment if the old one can no longer be continued).
   const restart = useCallback(() => {
     setFinished(false);
     setConfirming(false);
     setSessionExpired(false);
     setVerifyCode(null);
+    setPaymentData(null);
+    hasOpenedCheckout.current = false;
     startCheckout();
   }, [startCheckout]);
 
-  // On load, start checkout unless we are coming back to a payment we already
-  // started, in which case the poll below just verifies it.
   useEffect(() => {
     if (!meta) return;
 
     const isReturn = new URLSearchParams(window.location.search).get("paid") === "1";
     if (isReturn && readStoredCode(tierKey)) return;
 
-    // Deferred so the state updates inside startCheckout are not synchronous
-    // effect work. startingRef stops a double start, e.g. under StrictMode.
     const timer = setTimeout(startCheckout, 0);
     return () => clearTimeout(timer);
   }, [meta, tierKey, startCheckout]);
 
-  // Widget sessions last about an hour. Once ours is gone, offer a fresh
-  // checkout, but keep checking the old payment until the customer chooses to.
   useEffect(() => {
     if (!paymentData || paid) return;
-    const ms = Math.max(0, (paymentData.sessionExpiresIn - 15) * 1000);
-    const timer = setTimeout(() => setSessionExpired(true), ms);
+    const timer = setTimeout(() => setSessionExpired(true), 30 * 60 * 1000);
     return () => clearTimeout(timer);
   }, [paymentData, paid]);
 
-  // Ask the server whether RushPay has confirmed the payment. On success it
-  // sets the access cookie, so the VIP page will authorize this browser.
   useEffect(() => {
     if (!activeCode || paid) return;
 
@@ -234,6 +217,20 @@ export default function PaymentPage() {
     }, 1500);
     return () => clearTimeout(timeout);
   }, [paid, tierKey]);
+
+  const hasOpenedCheckout = useRef(false);
+
+  const handleSuccess = useCallback(() => {
+    setConfirming(true);
+  }, []);
+
+  const handleClose = useCallback(() => {
+    setError("Payment cancelled. Click to try again.");
+  }, []);
+
+  const handleError = useCallback((msg: string) => {
+    setError(msg);
+  }, []);
 
   if (!meta) {
     return (
@@ -346,14 +343,16 @@ export default function PaymentPage() {
               <span>Preparing checkout...</span>
             </div>
           )}
-          {paymentData?.paymentReference && paymentData.widgetSessionToken && !paid && (
-            <RushPayCheckout
-              key={`${paymentData.paymentReference}:${paymentData.widgetSessionToken}`}
-              paymentReference={paymentData.paymentReference}
-              widgetSessionToken={paymentData.widgetSessionToken}
-              returnUrl={`${window.location.origin}/payment/${tierKey}?paid=1`}
-              onPaymentComplete={() => setConfirming(true)}
-              onError={setError}
+          {paymentData?.paystackReference && paymentData.publicKey && !paid && !confirming && (
+            <PaystackCheckout
+              key={`${paymentData.paystackReference}:${paymentData.publicKey}`}
+              email="enokay69@enokay69.com"
+              amount={paymentData.amount}
+              reference={paymentData.paystackReference}
+              publicKey={paymentData.publicKey}
+              onSuccess={handleSuccess}
+              onClose={handleClose}
+              onError={handleError}
             />
           )}
         </div>

@@ -49,7 +49,7 @@ export interface Payment {
   amount: number;
   currency: string;
   status: PaymentStatus;
-  rushpayRef: string | null;
+  paystackRef: string | null;
   approvedAt: string | null;
   emailSentAt: string | null;
   createdAt: string;

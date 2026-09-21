@@ -1,26 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomBytes } from "node:crypto";
-import type { Payment } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { Tier, TIER_META } from "@/lib/types";
 import { getTierAmount } from "@/lib/pricing";
 import { paymentCookieOptions } from "@/lib/auth";
-import {
-  RushPayError,
-  type RushPayWidgetSessionResponse,
-  createRushPayPayment,
-  createRushPayWidgetSession,
-  toPublicError,
-} from "@/lib/rushpay";
 
-const DEFAULT_WIDGET_SESSION_SECONDS = 900;
 const CURRENCY = "GHS";
 const PAYMENT_CODE_RE = /^ENK-[A-Z0-9]{6}$/;
 
-// A double-click or refresh should continue the checkout already in progress
-// rather than open a second RushPay payment. The cookie remembers which
-// payment this browser started; it lives shorter than the widget session.
 const CHECKOUT_COOKIE = "enokay_checkout";
 const REUSE_WINDOW_SECONDS = 45 * 60;
 
@@ -40,12 +28,6 @@ function generatePaymentCode(): string {
   return code;
 }
 
-/** Generic customer message plus a reference code for the site owner. */
-function gatewayFailure(err: unknown) {
-  const { message, code } = toPublicError(err);
-  return { error: message, code };
-}
-
 function reply(
   body: Record<string, unknown>,
   status: number,
@@ -61,12 +43,11 @@ function reply(
   return response;
 }
 
-/** The still-open payment this browser already started for this tier, if any. */
 async function findReusablePayment(
   req: NextRequest,
   tier: Tier,
   amount: number
-): Promise<Payment | null> {
+) {
   const code = req.cookies.get(CHECKOUT_COOKIE)?.value;
   if (!code || !PAYMENT_CODE_RE.test(code)) return null;
 
@@ -75,7 +56,7 @@ async function findReusablePayment(
     !payment ||
     payment.tier !== tier ||
     payment.status !== "pending" ||
-    !payment.rushpayRef ||
+    !payment.paystackRef ||
     payment.currency !== CURRENCY ||
     payment.amount !== amount ||
     Date.now() - payment.createdAt.getTime() > REUSE_WINDOW_SECONDS * 1000
@@ -104,7 +85,6 @@ export async function POST(req: NextRequest) {
       return reply({ error: "Invalid tier" }, 400);
     }
 
-    // The amount only ever comes from the server, never from the request.
     const meta = TIER_META[tier as Tier];
     const amount = await getTierAmount(tier as Tier);
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -113,42 +93,10 @@ export async function POST(req: NextRequest) {
     }
 
     let payment = await findReusablePayment(req, tier as Tier, amount);
-    let widgetSession: RushPayWidgetSessionResponse | null = null;
-
-    if (payment?.rushpayRef) {
-      try {
-        widgetSession = await createRushPayWidgetSession(payment.rushpayRef);
-      } catch (err) {
-        // Only a payment RushPay no longer accepts (e.g. it is no longer
-        // pending) is replaced; an outage must not spawn extra payments.
-        if (!(err instanceof RushPayError && [400, 404, 409].includes(err.status))) {
-          console.error("RushPay API error:", err);
-          return reply(gatewayFailure(err), 502, payment.paymentCode);
-        }
-        console.warn(`Payment ${payment.id} can no longer be continued; starting a new one`);
-        payment = null;
-      }
-    }
 
     if (!payment) {
       const paymentCode = generatePaymentCode();
 
-      let rushpayRef: string;
-      try {
-        const created = await createRushPayPayment(
-          amount,
-          `Enokay69 - ${meta.label}`,
-          paymentCode
-        );
-        rushpayRef = created.data.payment_reference;
-      } catch (err) {
-        // Details stay in the server log; customers get a generic message.
-        console.error("RushPay API error:", err);
-        return reply(gatewayFailure(err), 502);
-      }
-
-      // Store the reference before issuing a widget session: verify and the
-      // webhook both find the payment through it.
       try {
         payment = await prisma.payment.create({
           data: {
@@ -157,24 +105,16 @@ export async function POST(req: NextRequest) {
             amount,
             currency: CURRENCY,
             status: "pending",
-            rushpayRef,
+            paystackRef: paymentCode,
           },
         });
       } catch (dbError) {
         console.error("DB create error:", dbError);
         return reply({ error: "Could not record your payment. Please try again." }, 500);
       }
-
-      try {
-        widgetSession = await createRushPayWidgetSession(rushpayRef);
-      } catch (err) {
-        // The payment is saved, so a retry continues it instead of duplicating.
-        console.error("RushPay API error:", err);
-        return reply(gatewayFailure(err), 502, payment.paymentCode);
-      }
     }
 
-    if (!widgetSession || !payment.rushpayRef) {
+    if (!payment || !payment.paystackRef) {
       return reply({ error: "Something went wrong. Please try again." }, 500);
     }
 
@@ -184,10 +124,8 @@ export async function POST(req: NextRequest) {
         amount: payment.amount,
         tier,
         tierLabel: meta.label,
-        widgetSessionToken: widgetSession.data.widget_session_token,
-        sessionExpiresIn:
-          widgetSession.data.expires_in ?? DEFAULT_WIDGET_SESSION_SECONDS,
-        paymentReference: payment.rushpayRef,
+        paystackReference: payment.paystackRef,
+        publicKey: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
       },
       200,
       payment.paymentCode

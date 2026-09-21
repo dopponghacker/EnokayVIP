@@ -1,14 +1,14 @@
 import { prisma } from "@/lib/prisma";
-import { getRushPayPaymentStatus } from "@/lib/rushpay";
+import { verifyTransaction } from "@/lib/paystack";
 
 /**
- * Marks a payment approved. Called by both the RushPay webhook and the
+ * Marks a payment approved. Called by both the Paystack webhook and the
  * browser-driven verify endpoint; whichever gets there first wins the
  * pending -> approved transition.
  */
 export async function fulfillPayment(
   paymentId: string,
-  opts: { rushpayRef?: string } = {}
+  opts: { paystackRef?: string } = {}
 ): Promise<{ claimed: boolean }> {
   const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
   if (!payment) return { claimed: false };
@@ -21,7 +21,7 @@ export async function fulfillPayment(
     data: {
       status: "approved",
       approvedAt: new Date(),
-      ...(opts.rushpayRef ? { rushpayRef: opts.rushpayRef } : {}),
+      ...(opts.paystackRef ? { paystackRef: opts.paystackRef } : {}),
     },
   });
 
@@ -32,10 +32,9 @@ export async function fulfillPayment(
 
 export type PaymentOutcome = "paid" | "pending" | "failed";
 
-const FAILED_STATUSES = new Set(["failed", "cancelled", "canceled"]);
+const FAILED_STATUSES = new Set(["failed", "cancelled", "canceled", "abandoned", "reversed"]);
 const EXPIRED_STATUSES = new Set(["expired"]);
 
-/** Records a dead payment so it stops being re-checked. Never touches a paid one. */
 async function markPaymentDead(paymentId: string, status: "failed" | "expired") {
   await prisma.payment.updateMany({
     where: { id: paymentId, status: "pending" },
@@ -44,43 +43,41 @@ async function markPaymentDead(paymentId: string, status: "failed" | "expired") 
 }
 
 /**
- * Asks RushPay for the payment's real state and approves it if it completed
+ * Asks Paystack for the payment's real state and approves it if it completed
  * for at least the expected amount. Never trusts a redirect or webhook body on
- * its own. Throws when RushPay can't be reached, so callers can retry.
+ * its own. Throws when Paystack can't be reached, so callers can retry.
  */
 export async function confirmAndFulfillPayment(payment: {
   id: string;
   amount: number;
   currency: string;
-  rushpayRef: string | null;
+  paystackRef: string | null;
 }): Promise<PaymentOutcome> {
-  if (!payment.rushpayRef) return "pending";
+  if (!payment.paystackRef) return "pending";
 
-  const { data } = await getRushPayPaymentStatus(payment.rushpayRef);
+  const { data } = await verifyTransaction(payment.paystackRef);
   const status = data?.status?.toLowerCase();
 
-  if (status === "completed") {
+  if (status === "success") {
     if (data.currency && data.currency.toUpperCase() !== payment.currency.toUpperCase()) {
       console.error(
-        `Payment ${payment.id}: RushPay currency ${data.currency} does not match ${payment.currency}`
+        `Payment ${payment.id}: Paystack currency ${data.currency} does not match ${payment.currency}`
       );
       return "failed";
     }
-    const paidAmount = parseFloat(data.amount ?? "");
+    const paidAmount = data.amount / 100;
     if (!Number.isFinite(paidAmount) || paidAmount < payment.amount - 0.01) {
       console.error(
-        `Payment ${payment.id}: RushPay completed ${data.amount} but ${payment.amount} was expected`
+        `Payment ${payment.id}: Paystack completed ${data.amount / 100} but ${payment.amount} was expected`
       );
       return "failed";
     }
     console.info(
-      `Payment ${payment.id} completed on RushPay: ` +
+      `Payment ${payment.id} completed on Paystack: ` +
         JSON.stringify({
           status: data.status,
-          payment_status: data.payment_status,
-          paid: data.paid,
-          verified: data.verified,
-          amount: data.amount,
+          gateway_response: data.gateway_response,
+          amount: data.amount / 100,
         })
     );
     await fulfillPayment(payment.id);

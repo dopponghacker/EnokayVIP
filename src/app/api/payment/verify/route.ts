@@ -15,7 +15,7 @@ import {
 const PAYMENT_CODE_RE = /^ENK-[A-Z0-9]{6}$/;
 
 /**
- * Confirms a payment with RushPay from the server and, once it is paid,
+ * Confirms a payment with Paystack from the server and, once it is paid,
  * issues the signed access cookie for the purchased tier. The browser polls
  * this after starting checkout; the webhook may already have approved it.
  */
@@ -46,7 +46,6 @@ export async function POST(req: NextRequest) {
       try {
         outcome = await confirmAndFulfillPayment(payment);
       } catch (err) {
-        // RushPay hiccup: report "not paid yet" so the client keeps polling.
         console.error("payment/verify: status lookup failed:", err);
       }
     }

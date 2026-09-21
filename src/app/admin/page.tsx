@@ -905,9 +905,9 @@ export default function AdminPage() {
                             <span className={`text-[10px] font-bold rounded-full px-2 py-0.5 ${paymentStatusStyles[payment.status]}`}>
                               {payment.status === "email_sent" ? "Email Sent" : payment.status.charAt(0).toUpperCase() + payment.status.slice(1)}
                             </span>
-                            {payment.rushpayRef && (
+                            {payment.paystackRef && (
                               <span className="text-[10px] font-mono bg-teal-50 text-teal-600 px-1.5 py-0.5 rounded border border-teal-100">
-                                <i className="fas fa-bolt mr-1" />RushPay
+                                <i className="fas fa-bolt mr-1" />Paystack
                               </span>
                             )}
                           </div>

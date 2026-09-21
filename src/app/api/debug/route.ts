@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/api-auth";
-import { RushPayError, getRushPayPaymentStatus } from "@/lib/rushpay";
+import { PaystackError, verifyTransaction } from "@/lib/paystack";
 
 /**
  * Admin-only production diagnostics. Uses the same client as real payments,
@@ -14,11 +14,11 @@ export async function GET(req: NextRequest) {
   const results: Record<string, unknown> = {
     deployment: process.env.VERCEL_ENV || process.env.NODE_ENV,
     env: {
-      RUSHPAY_API_KEY: process.env.RUSHPAY_API_KEY
-        ? `set (${process.env.RUSHPAY_API_KEY.length} chars)`
+      PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY
+        ? `set (${process.env.PAYSTACK_SECRET_KEY.length} chars)`
         : "MISSING",
-      RUSHPAY_WEBHOOK_SECRET: process.env.RUSHPAY_WEBHOOK_SECRET
-        ? `set (${process.env.RUSHPAY_WEBHOOK_SECRET.length} chars)`
+      PAYSTACK_WEBHOOK_SECRET: process.env.PAYSTACK_WEBHOOK_SECRET
+        ? `set (${process.env.PAYSTACK_WEBHOOK_SECRET.length} chars)`
         : "MISSING",
       AUTH_SECRET: process.env.AUTH_SECRET ? "set" : "MISSING",
       DATABASE_URL: process.env.DATABASE_URL ? "set" : "MISSING",
@@ -26,26 +26,24 @@ export async function GET(req: NextRequest) {
     },
   };
 
-  // Looking up a payment that doesn't exist answers "Payment not found" when the
-  // key is valid and reachable, and 401/403 when it is wrong or blocked.
   try {
-    await getRushPayPaymentStatus("API_DIAGNOSTIC_CHECK");
-    results.rushpay = { ok: true };
+    await verifyTransaction("API_DIAGNOSTIC_CHECK");
+    results.paystack = { ok: true };
   } catch (e) {
-    if (e instanceof RushPayError) {
+    if (e instanceof PaystackError) {
       const keyAccepted = e.status === 400 || e.status === 404;
-      results.rushpay = {
+      results.paystack = {
         ok: keyAccepted,
         status: e.status,
         message: e.message,
         verdict: keyAccepted
-          ? "API key accepted and RushPay reachable"
+          ? "API key accepted and Paystack reachable"
           : e.status === 401 || e.status === 403
-            ? "RushPay rejected the key or blocked this server"
-            : "RushPay unreachable or erroring",
+            ? "Paystack rejected the key or blocked this server"
+            : "Paystack unreachable or erroring",
       };
     } else {
-      results.rushpay = { ok: false, message: e instanceof Error ? e.message : String(e) };
+      results.paystack = { ok: false, message: e instanceof Error ? e.message : String(e) };
     }
   }
 
