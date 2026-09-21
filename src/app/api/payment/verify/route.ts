@@ -31,13 +31,19 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => null);
     const paymentCode = typeof body?.paymentCode === "string" ? body.paymentCode : "";
     if (!PAYMENT_CODE_RE.test(paymentCode)) {
+      console.warn(`payment/verify: invalid paymentCode format: ${paymentCode}`);
       return NextResponse.json({ error: "Invalid payment code" }, { status: 400 });
     }
 
+    console.info(`payment/verify: checking paymentCode=${paymentCode}`);
+
     let payment = await prisma.payment.findUnique({ where: { paymentCode } });
     if (!payment) {
+      console.warn(`payment/verify: payment not found for code=${paymentCode}`);
       return NextResponse.json({ error: "Payment not found" }, { status: 404 });
     }
+
+    console.info(`payment/verify: payment ${payment.id} status=${payment.status}, paystackRef=${payment.paystackRef}`);
 
     let outcome: PaymentOutcome =
       payment.status === "approved" ? "paid" : "pending";
@@ -45,6 +51,7 @@ export async function POST(req: NextRequest) {
     if (outcome !== "paid") {
       try {
         outcome = await confirmAndFulfillPayment(payment);
+        console.info(`payment/verify: outcome=${outcome} for payment ${payment.id}`);
       } catch (err) {
         console.error("payment/verify: status lookup failed:", err);
       }

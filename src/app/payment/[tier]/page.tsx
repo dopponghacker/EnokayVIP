@@ -221,6 +221,7 @@ export default function PaymentPage() {
   const hasOpenedCheckout = useRef(false);
 
   const handleSuccess = useCallback(() => {
+    setError(null);
     setConfirming(true);
   }, []);
 

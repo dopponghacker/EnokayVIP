@@ -53,10 +53,30 @@ export async function confirmAndFulfillPayment(payment: {
   currency: string;
   paystackRef: string | null;
 }): Promise<PaymentOutcome> {
-  if (!payment.paystackRef) return "pending";
+  if (!payment.paystackRef) {
+    console.warn(`Payment ${payment.id}: no paystackRef, returning pending`);
+    return "pending";
+  }
 
-  const { data } = await verifyTransaction(payment.paystackRef);
-  const status = data?.status?.toLowerCase();
+  console.info(`Payment ${payment.id}: verifying with Paystack ref=${payment.paystackRef}`);
+
+  let verifyResult;
+  try {
+    verifyResult = await verifyTransaction(payment.paystackRef);
+  } catch (err) {
+    console.error(`Payment ${payment.id}: Paystack verify error:`, err);
+    throw err;
+  }
+
+  const data = verifyResult?.data;
+
+  if (!data) {
+    console.warn(`Payment ${payment.id}: Paystack returned no data for ref=${payment.paystackRef}`);
+    return "pending";
+  }
+
+  const status = data.status?.toLowerCase();
+  console.info(`Payment ${payment.id}: Paystack status=${status}, amount=${data.amount}`);
 
   if (status === "success") {
     if (data.currency && data.currency.toUpperCase() !== payment.currency.toUpperCase()) {
@@ -65,21 +85,14 @@ export async function confirmAndFulfillPayment(payment: {
       );
       return "failed";
     }
-    const paidAmount = data.amount / 100;
+    const paidAmount = (data.amount || 0) / 100;
     if (!Number.isFinite(paidAmount) || paidAmount < payment.amount - 0.01) {
       console.error(
-        `Payment ${payment.id}: Paystack completed ${data.amount / 100} but ${payment.amount} was expected`
+        `Payment ${payment.id}: Paystack completed ${paidAmount} but ${payment.amount} was expected`
       );
       return "failed";
     }
-    console.info(
-      `Payment ${payment.id} completed on Paystack: ` +
-        JSON.stringify({
-          status: data.status,
-          gateway_response: data.gateway_response,
-          amount: data.amount / 100,
-        })
-    );
+    console.info(`Payment ${payment.id} completed on Paystack`);
     await fulfillPayment(payment.id);
     return "paid";
   }

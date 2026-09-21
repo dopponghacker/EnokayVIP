@@ -77,31 +77,19 @@ export default function PaystackCheckout({
   onError,
 }: PaystackCheckoutProps) {
   const hasOpened = useRef(false);
+  const callbackFired = useRef(false);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (hasOpened.current) return;
     hasOpened.current = true;
 
-    console.log("PaystackCheckout: Initializing with", {
-      email,
-      amount,
-      reference,
-      publicKeyLength: publicKey?.length,
-    });
-
     loadPaystackScript()
       .then(() => {
         if (!window.PaystackPop) {
-          const msg = "Payment library failed to load. Please try again.";
-          console.error(msg);
-          setError(msg);
-          onError(msg);
+          onError("Payment library failed to load. Please try again.");
           return;
         }
-
-        console.log("PaystackCheckout: Opening popup");
 
         const handler = window.PaystackPop.setup({
           key: publicKey,
@@ -110,11 +98,12 @@ export default function PaystackCheckout({
           ref: reference,
           currency: "GHS",
           onClose: () => {
-            console.log("PaystackCheckout: Popup closed by user");
-            onClose();
+            if (!callbackFired.current) {
+              onClose();
+            }
           },
           callback: (response) => {
-            console.log("PaystackCheckout: Payment successful", response);
+            callbackFired.current = true;
             onSuccess(response.reference);
           },
         });
@@ -123,24 +112,18 @@ export default function PaystackCheckout({
         setLoading(false);
       })
       .catch((err: unknown) => {
-        const msg = "Could not load payment form. Check your connection and try again.";
         console.error("Paystack load error:", err);
-        setError(msg);
-        onError(msg);
+        onError("Could not load payment form. Check your connection and try again.");
       });
   }, []);
 
-  if (error) {
+  if (loading) {
     return (
-      <div className="py-4 text-center text-sm text-red-500">
-        <p>{error}</p>
+      <div className="py-4 text-center text-sm text-slate-500">
+        <p>Loading secure checkout...</p>
       </div>
     );
   }
 
-  return (
-    <div className="py-4 text-center text-sm text-slate-500">
-      <p>{loading ? "Loading secure checkout..." : "Awaiting payment..."}</p>
-    </div>
-  );
+  return null;
 }
