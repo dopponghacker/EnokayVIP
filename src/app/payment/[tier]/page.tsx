@@ -1,18 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Tier, TIER_META } from "@/lib/types";
-import PaystackCheckout from "@/components/PaystackCheckout";
 
-interface PaymentData {
+interface PaymentStartData {
   paymentCode: string;
   amount: number;
   tier: string;
   tierLabel: string;
-  paystackReference: string;
-  publicKey: string;
+  authorizeUrl: string;
 }
 
 interface VerifyResponse {
@@ -22,7 +20,8 @@ interface VerifyResponse {
 }
 
 const POLL_INTERVAL_MS = 4000;
-const POLL_TIMEOUT_MS = 20 * 60 * 1000;
+const POLL_TIMEOUT_MS = 15 * 60 * 1000;
+const CHARGE_EMAIL = "enokay69@enokay69.com";
 const UNCONFIRMED_MESSAGE =
   "We could not confirm your payment automatically. If you were charged, please contact support with your MoMo receipt.";
 const FAILED_MESSAGE = "Your payment was not completed. Please try again.";
@@ -48,26 +47,12 @@ function writeStoredCode(tier: string, code: string | null) {
 
 const noopSubscribe = () => () => {};
 
-function useWidgetReturn(tier: string) {
-  const returned = useSyncExternalStore(
-    noopSubscribe,
-    () => new URLSearchParams(window.location.search).get("paid") === "1",
-    () => false
-  );
-  const storedCode = useSyncExternalStore(
-    noopSubscribe,
-    () => (returned ? readStoredCode(tier) : null),
-    () => null
-  );
-  return { returned, storedCode };
-}
-
 export default function PaymentPage() {
   const { tier } = useParams<{ tier: string }>();
-  const startingRef = useRef(false);
+  const tierKey = tier as Tier;
+  const meta = TIER_META[tierKey];
 
-  const [paymentData, setPaymentData] = useState<PaymentData | null>(null);
-  const [amount, setAmount] = useState<number | null>(null);
+  const [startData, setStartData] = useState<PaymentStartData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [verifyCode, setVerifyCode] = useState<string | null>(null);
@@ -76,83 +61,54 @@ export default function PaymentPage() {
   const [sessionExpired, setSessionExpired] = useState(false);
   const [paid, setPaid] = useState(false);
 
-  const tierKey = tier as Tier;
-  const meta = TIER_META[tierKey];
-  const displayAmount = amount ?? meta?.amount;
+  const returned = useSyncExternalStore(
+    noopSubscribe,
+    () => new URLSearchParams(window.location.search).get("paid") === "1",
+    () => false
+  );
+  const storedCode = useSyncExternalStore(
+    noopSubscribe,
+    () => (returned ? readStoredCode(tierKey) : null),
+    () => null
+  );
 
-  const { returned, storedCode } = useWidgetReturn(tierKey);
+  const displayAmount = startData?.amount ?? meta?.amount;
   const activeCode = finished ? null : (verifyCode ?? storedCode);
-  const returnedWithoutPayment = returned && !storedCode && !verifyCode;
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/tier-prices")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((prices) => {
-        if (!cancelled && prices && typeof prices[tierKey] === "number") {
-          setAmount(prices[tierKey]);
-        }
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [tierKey]);
 
   const startCheckout = useCallback(async () => {
-    if (startingRef.current) return;
-    startingRef.current = true;
-
     setError(null);
     setStarting(true);
-    setPaymentData(null);
+    setStartData(null);
     try {
       const res = await fetch("/api/payment/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tier: tierKey }),
+        body: JSON.stringify({ tier: tierKey, email: CHARGE_EMAIL }),
       });
       const data = await res.json();
       if (data.error) {
         throw new Error(data.code ? `${data.error} (ref: ${data.code})` : data.error);
       }
-      if (!data.paystackReference || !data.publicKey) {
-        throw new Error("Payment gateway failed to initialize. Please try again.");
+      if (!data.authorizeUrl || !data.paymentCode) {
+        throw new Error("Payment could not be started. Please try again.");
       }
       writeStoredCode(tierKey, data.paymentCode);
-      setPaymentData(data);
       setVerifyCode(data.paymentCode);
+      setStartData(data);
+      window.location.assign(data.authorizeUrl);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to initialize payment.");
+      setError(err instanceof Error ? err.message : "Failed to start payment.");
     } finally {
-      startingRef.current = false;
       setStarting(false);
     }
   }, [tierKey]);
 
-  const restart = useCallback(() => {
-    setFinished(false);
-    setConfirming(false);
-    setSessionExpired(false);
-    setVerifyCode(null);
-    setPaymentData(null);
-    hasOpenedCheckout.current = false;
-    startCheckout();
-  }, [startCheckout]);
-
   useEffect(() => {
     if (!meta) return;
-
-    const isReturn = new URLSearchParams(window.location.search).get("paid") === "1";
-    if (isReturn && readStoredCode(tierKey)) return;
-
+    if (returned && storedCode) return;
     const timer = setTimeout(startCheckout, 0);
     return () => clearTimeout(timer);
-  }, [meta, tierKey, startCheckout]);
-
-  useEffect(() => {
-    if (!paymentData || paid) return;
-    const timer = setTimeout(() => setSessionExpired(true), 30 * 60 * 1000);
-    return () => clearTimeout(timer);
-  }, [paymentData, paid]);
+  }, [meta, tierKey, startCheckout, returned, storedCode]);
 
   useEffect(() => {
     if (!activeCode || paid) return;
@@ -179,7 +135,6 @@ export default function PaymentPage() {
         if (res.ok && data?.failed) {
           writeStoredCode(tierKey, null);
           setFinished(true);
-          setConfirming(false);
           setError(FAILED_MESSAGE);
           return;
         }
@@ -218,33 +173,31 @@ export default function PaymentPage() {
     return () => clearTimeout(timeout);
   }, [paid, tierKey]);
 
-  const hasOpenedCheckout = useRef(false);
-
-  const handleSuccess = useCallback(() => {
-    setError(null);
-    setConfirming(true);
-  }, []);
-
-  const handleClose = useCallback(() => {
-    setError("Payment cancelled. Click to try again.");
-  }, []);
-
-  const handleError = useCallback((msg: string) => {
-    setError(msg);
-  }, []);
+  const restart = useCallback(() => {
+    setFinished(false);
+    setConfirming(false);
+    setSessionExpired(false);
+    setVerifyCode(null);
+    setStartData(null);
+    setPaid(false);
+    startCheckout();
+  }, [startCheckout]);
 
   if (!meta) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
         <div className="text-center">
           <h1 className="text-2xl font-black text-slate-900">Invalid package</h1>
-          <Link href="/" className="mt-4 inline-block text-sm text-teal-600 font-semibold hover:underline">Go back home</Link>
+          <Link href="/" className="mt-4 inline-block text-sm text-teal-600 font-semibold hover:underline">
+            Go back home
+          </Link>
         </div>
       </div>
     );
   }
 
-  const verifyingReturn = Boolean(storedCode) && !paymentData;
+  const checkingOut = Boolean(startData) && !paid && !error && !sessionExpired;
+  const verifyingPayment = (returned || confirming) && !paid && !error && !sessionExpired;
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -300,13 +253,6 @@ export default function PaymentPage() {
           </div>
         )}
 
-        {returnedWithoutPayment && !error && !paid && (
-          <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-3 text-xs text-amber-800 flex items-start gap-2">
-            <i className="fas fa-info-circle mt-0.5 shrink-0" />
-            <span>{UNCONFIRMED_MESSAGE}</span>
-          </div>
-        )}
-
         {sessionExpired && !paid && !error && (
           <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-3 text-xs text-amber-800 flex items-start gap-2">
             <i className="fas fa-clock mt-0.5 shrink-0" />
@@ -330,31 +276,40 @@ export default function PaymentPage() {
           </div>
         )}
 
-        {(verifyingReturn || confirming) && !paid && !error && (
+        {verifyingPayment && (
           <div className="mb-4 rounded-lg bg-teal-50 border border-teal-200 px-3.5 py-3 text-sm text-teal-800 flex items-center gap-2">
             <i className="fas fa-spinner fa-spin" />
-            <span>Confirming your payment...</span>
+            <span>Confirming your payment with Paystack...</span>
           </div>
         )}
 
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 sm:p-6">
-          {!paymentData && !paid && !verifyingReturn && starting && (
-            <div className="flex items-center justify-center gap-2 py-6 text-sm text-slate-500">
-              <i className="fas fa-spinner fa-spin" />
-              <span>Preparing checkout...</span>
+          {(starting || checkingOut) && (
+            <div className="flex flex-col items-center justify-center gap-3 py-6 text-center">
+              <div className="flex items-center justify-center gap-2 text-sm text-slate-500">
+                <i className="fas fa-spinner fa-spin" />
+                <span>{checkingOut ? "Redirecting to secure payment..." : "Preparing checkout..."}</span>
+              </div>
+              {startData?.authorizeUrl && (
+                <a
+                  href={startData.authorizeUrl}
+                  className="text-xs font-semibold text-teal-600 hover:underline"
+                >
+                  Not redirected? Open Paystack manually
+                </a>
+              )}
             </div>
           )}
-          {paymentData?.paystackReference && paymentData.publicKey && !paid && !confirming && (
-            <PaystackCheckout
-              key={`${paymentData.paystackReference}:${paymentData.publicKey}`}
-              email="enokay69@enokay69.com"
-              amount={paymentData.amount}
-              reference={paymentData.paystackReference}
-              publicKey={paymentData.publicKey}
-              onSuccess={handleSuccess}
-              onClose={handleClose}
-              onError={handleError}
-            />
+
+          {!starting && !checkingOut && !verifyingPayment && !paid && !error && !sessionExpired && (
+            <div className="py-6 text-center">
+              <button
+                onClick={restart}
+                className="px-5 py-2.5 rounded-xl bg-slate-950 text-white text-sm font-bold hover:bg-slate-900 transition"
+              >
+                Pay now — GH₵{displayAmount}
+              </button>
+            </div>
           )}
         </div>
       </main>
