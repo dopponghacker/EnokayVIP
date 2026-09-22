@@ -4,14 +4,13 @@ import { prisma } from "@/lib/prisma";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { Tier, TIER_META } from "@/lib/types";
 import { getTierAmount } from "@/lib/pricing";
-import {
-  initializeTransaction,
-  toPublicError,
-  PaystackError,
-} from "@/lib/paystack";
+import { paymentCookieOptions } from "@/lib/auth";
 
 const CURRENCY = "GHS";
-const DEFAULT_PAYMENT_EMAIL = "enokay69@enokay69.com";
+const PAYMENT_CODE_RE = /^ENK-[A-Z0-9]{6}$/;
+
+const CHECKOUT_COOKIE = "enokay_checkout";
+const REUSE_WINDOW_SECONDS = 45 * 60;
 
 function generatePaymentCode(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -29,9 +28,42 @@ function generatePaymentCode(): string {
   return code;
 }
 
-function publicCallbackUrl(req: NextRequest): string {
-  const base = process.env.NEXT_PUBLIC_SITE_URL ?? new URL(req.url).origin;
-  return `${base.replace(/\/$/, "")}/payment/{{tier}}?paid=1`;
+function reply(
+  body: Record<string, unknown>,
+  status: number,
+  paymentCode?: string
+) {
+  const response = NextResponse.json(body, { status });
+  if (paymentCode) {
+    response.cookies.set(CHECKOUT_COOKIE, paymentCode, {
+      ...paymentCookieOptions,
+      maxAge: REUSE_WINDOW_SECONDS,
+    });
+  }
+  return response;
+}
+
+async function findReusablePayment(
+  req: NextRequest,
+  tier: Tier,
+  amount: number
+) {
+  const code = req.cookies.get(CHECKOUT_COOKIE)?.value;
+  if (!code || !PAYMENT_CODE_RE.test(code)) return null;
+
+  const payment = await prisma.payment.findUnique({ where: { paymentCode: code } });
+  if (
+    !payment ||
+    payment.tier !== tier ||
+    payment.status !== "pending" ||
+    !payment.paystackRef ||
+    payment.currency !== CURRENCY ||
+    payment.amount !== amount ||
+    Date.now() - payment.createdAt.getTime() > REUSE_WINDOW_SECONDS * 1000
+  ) {
+    return null;
+  }
+  return payment;
 }
 
 export async function POST(req: NextRequest) {
@@ -40,110 +72,66 @@ export async function POST(req: NextRequest) {
       req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
     const limit = checkRateLimit(`pay-init:${ip}`, 10, 15 * 60 * 1000);
     if (!limit.allowed) {
-      return NextResponse.json(
-        { error: "Too many attempts. Please try again later." },
-        { status: 429 }
-      );
+      return reply({ error: "Too many attempts. Please try again later." }, 429);
     }
 
     const body: unknown = await req.json().catch(() => null);
-    const payload =
-      typeof body === "object" && body !== null
-        ? (body as { tier?: unknown; email?: unknown })
-        : {};
+    const tier =
+      typeof body === "object" && body !== null && "tier" in body
+        ? (body as { tier: unknown }).tier
+        : undefined;
 
-    if (typeof payload.tier !== "string" || !(payload.tier in TIER_META)) {
-      return NextResponse.json({ error: "Invalid tier" }, { status: 400 });
+    if (typeof tier !== "string" || !(tier in TIER_META)) {
+      return reply({ error: "Invalid tier" }, 400);
     }
 
-    const tier = payload.tier as Tier;
-    const email =
-      typeof payload.email === "string" && payload.email.includes("@")
-        ? payload.email.slice(0, 200)
-        : DEFAULT_PAYMENT_EMAIL;
-
-    const amount = await getTierAmount(tier);
+    const meta = TIER_META[tier as Tier];
+    const amount = await getTierAmount(tier as Tier);
     if (!Number.isFinite(amount) || amount <= 0) {
       console.error(`payment/initiate: invalid configured price for ${tier}: ${amount}`);
-      return NextResponse.json(
-        { error: "Something went wrong. Please try again." },
-        { status: 500 }
-      );
+      return reply({ error: "Something went wrong. Please try again." }, 500);
     }
 
-    const paymentCode = generatePaymentCode();
+    let payment = await findReusablePayment(req, tier as Tier, amount);
 
-    try {
-      await prisma.payment.create({
-        data: {
-          paymentCode,
-          email,
-          tier: tier as string,
-          amount,
-          currency: CURRENCY,
-          status: "pending",
-          paystackRef: paymentCode,
-        },
-      });
-    } catch (dbError) {
-      console.error("DB create error:", dbError);
-      return NextResponse.json(
-        { error: "Could not record your payment. Please try again." },
-        { status: 500 }
-      );
+    if (!payment) {
+      const paymentCode = generatePaymentCode();
+
+      try {
+        payment = await prisma.payment.create({
+          data: {
+            paymentCode,
+            tier,
+            amount,
+            currency: CURRENCY,
+            status: "pending",
+            paystackRef: paymentCode,
+          },
+        });
+      } catch (dbError) {
+        console.error("DB create error:", dbError);
+        return reply({ error: "Could not record your payment. Please try again." }, 500);
+      }
     }
 
-    const callbackUrl = publicCallbackUrl(req).replace("{{tier}}", tier);
-    let initResult;
-    try {
-      initResult = await initializeTransaction(
-        email,
-        Math.round(amount * 100),
-        paymentCode,
-        { payment_code: paymentCode, tier },
-        callbackUrl
-      );
-    } catch (err) {
-      const publicError = toPublicError(err);
-      console.error(
-        `payment/initiate: Paystack initialize failed for ${paymentCode}:`,
-        err instanceof PaystackError ? err.message : err
-      );
-      return NextResponse.json(
-        {
-          error: publicError.message,
-          message: publicError.message,
-          code: publicError.code,
-        },
-        { status: 502 }
-      );
+    if (!payment || !payment.paystackRef) {
+      return reply({ error: "Something went wrong. Please try again." }, 500);
     }
 
-    const authorizeUrl = initResult?.data?.authorization_url;
-    if (!authorizeUrl) {
-      console.error(
-        `payment/initiate: Paystack returned no authorization_url for ${paymentCode}:`,
-        JSON.stringify(initResult)
-      );
-      return NextResponse.json(
-        { error: "Something went wrong. Please try again." },
-        { status: 502 }
-      );
-    }
-
-    return NextResponse.json({
-      paymentCode,
-      amount,
-      tier,
-      tierLabel: TIER_META[tier].label,
-      paystackReference: paymentCode,
-      authorizeUrl,
-    });
+    return reply(
+      {
+        paymentCode: payment.paymentCode,
+        amount: payment.amount,
+        tier,
+        tierLabel: meta.label,
+        paystackReference: payment.paystackRef,
+        publicKey: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
+      },
+      200,
+      payment.paymentCode
+    );
   } catch (error) {
     console.error("payment/initiate error:", error);
-    return NextResponse.json(
-      { error: "Something went wrong. Please try again." },
-      { status: 500 }
-    );
+    return reply({ error: "Something went wrong. Please try again." }, 500);
   }
 }

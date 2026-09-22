@@ -110,20 +110,16 @@ export async function initializeTransaction(
   email: string,
   amountInKobo: number,
   reference: string,
-  metadata?: Record<string, unknown>,
-  callbackUrl?: string
+  metadata?: Record<string, unknown>
 ): Promise<PaystackInitializeResponse> {
-  const body: Record<string, unknown> = {
-    email,
-    amount: amountInKobo,
-    reference,
-    metadata: metadata ?? {},
-  };
-  if (callbackUrl) body.callback_url = callbackUrl;
-
   const result = await paystackFetch("/transaction/initialize", {
     method: "POST",
-    body,
+    body: {
+      email,
+      amount: amountInKobo,
+      reference,
+      metadata: metadata ?? {},
+    },
   });
   return result;
 }
