@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Tier, TIER_META } from "@/lib/types";
+import { PAYMENTS_ENABLED } from "@/lib/payment-config";
 import PaystackCheckout from "@/components/PaystackCheckout";
 
 interface PaymentData {
@@ -98,7 +99,7 @@ export default function PaymentPage() {
   }, [tierKey]);
 
   const startCheckout = useCallback(async () => {
-    if (startingRef.current) return;
+    if (!PAYMENTS_ENABLED || startingRef.current) return;
     startingRef.current = true;
 
     setError(null);
@@ -139,7 +140,7 @@ export default function PaymentPage() {
   }, [startCheckout]);
 
   useEffect(() => {
-    if (!meta) return;
+    if (!meta || !PAYMENTS_ENABLED) return;
 
     const isReturn = new URLSearchParams(window.location.search).get("paid") === "1";
     if (isReturn && readStoredCode(tierKey)) return;
@@ -240,6 +241,56 @@ export default function PaymentPage() {
           <h1 className="text-2xl font-black text-slate-900">Invalid package</h1>
           <Link href="/" className="mt-4 inline-block text-sm text-teal-600 font-semibold hover:underline">Go back home</Link>
         </div>
+      </div>
+    );
+  }
+
+  if (!PAYMENTS_ENABLED) {
+    return (
+      <div className="min-h-screen bg-slate-50">
+        <header className="bg-slate-950 border-b border-white/10">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between">
+            <Link href="/" className="flex items-center gap-2.5 min-w-0">
+              <div className="w-9 h-9 bg-teal-400 rounded-xl flex items-center justify-center text-slate-950 font-black text-sm shrink-0">69</div>
+              <span className="text-lg font-black text-white tracking-[-0.04em] hidden sm:inline">Enokay<span className="text-teal-400">69</span></span>
+            </Link>
+            <Link href="/" className="w-10 h-10 flex items-center justify-center text-slate-400 hover:text-white transition rounded-xl hover:bg-white/10">
+              <i className="fas fa-arrow-left" />
+            </Link>
+          </div>
+        </header>
+
+        <main className="max-w-lg mx-auto px-4 sm:px-6 py-6 sm:py-10">
+          <div className="mb-5 flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0">
+              <i className={`fas ${tierKey === "accurate-odds" ? "fa-crown" : tierKey === "draw-tips" ? "fa-handshake" : "fa-bullseye"}`} />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-lg font-black text-slate-950">{meta.label}</h1>
+              <div className="flex items-end gap-1.5">
+                <span className="text-2xl font-black text-slate-950">GH₵{displayAmount}</span>
+                <span className="text-xs text-slate-500 mb-0.5">one-time access</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 text-center">
+            <div className="mx-auto w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+              <i className="fas fa-pause-circle text-xl" />
+            </div>
+            <h2 className="mt-4 text-lg font-black text-slate-950">Payments are temporarily disabled</h2>
+            <p className="mt-2 text-xs text-slate-600 leading-5">
+              We are not accepting new payments right now. {meta.label} access will be
+              available again shortly — please check back later.
+            </p>
+            <Link
+              href="/"
+              className="mt-5 inline-flex items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-slate-800"
+            >
+              <i className="fas fa-arrow-left" /> Back to home
+            </Link>
+          </div>
+        </main>
       </div>
     );
   }

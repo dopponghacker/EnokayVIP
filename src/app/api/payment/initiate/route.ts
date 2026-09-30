@@ -5,6 +5,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { Tier, TIER_META } from "@/lib/types";
 import { getTierAmount } from "@/lib/pricing";
 import { paymentCookieOptions } from "@/lib/auth";
+import { PAYMENTS_ENABLED, PAYMENTS_DISABLED_MESSAGE } from "@/lib/payment-config";
 
 const CURRENCY = "GHS";
 const PAYMENT_CODE_RE = /^ENK-[A-Z0-9]{6}$/;
@@ -67,6 +68,10 @@ async function findReusablePayment(
 }
 
 export async function POST(req: NextRequest) {
+  if (!PAYMENTS_ENABLED) {
+    return reply({ error: PAYMENTS_DISABLED_MESSAGE }, 503);
+  }
+
   try {
     const ip =
       req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
